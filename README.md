@@ -17,7 +17,7 @@ to it.
   being tested. Provides: the reset vector / M-mode entry at
   `0x80000000`, `gp`/`sp`/`mtvec` setup, a minimal trap handler
   (expects only `EBREAK`, reports and hangs on anything else), the
-  ns16550a UART driver (9600 8N1 init, `putc`/`puts`, hex/decimal
+  ns16550a UART driver (115200 8N1 init, `putc`/`puts`, hex/decimal
   printing), the `check` pass/fail comparator (prints a verdict and
   tracks running `pass_count`/`fail_count` totals), and the final
   summary/halt. It calls a single symbol, `run_tests`, and otherwise
@@ -53,10 +53,10 @@ It has been built and run for real (not just hand-checked) with:
 
 Current totals, all passing:
 
-| Image | Result lines | Per-instruction | Bit-independence | UART output (at 9600 baud) |
+| Image | Result lines | Per-instruction | Bit-independence | UART output (at 115200 baud) |
 |---|---|---|---|---|
-| RV64 (`build/rv64/`) | **13903** | 1945 | 11958 | ~529 KB, ~9 min |
-| RV32 (`build/rv32/`) | **10882** | 1479 | 9403 | ~415 KB, ~7 min |
+| RV64 (`build/rv64/`) | **13903** | 1945 | 11958 | ~529 KB, ~46 s |
+| RV32 (`build/rv32/`) | **10882** | 1479 | 9403 | ~415 KB, ~36 s |
 
 Under QEMU each run takes about a second.
 

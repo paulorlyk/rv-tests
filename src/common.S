@@ -8,7 +8,7 @@
  *   - reset vector / M-mode entry at 0x80000000, gp/sp/mtvec setup
  *   - a minimal M-mode trap handler (expects only C.EBREAK/EBREAK,
  *     reports and hangs on anything else)
- *   - an ns16550a UART driver (init for 9600 8N1, putc/puts, hex/dec
+ *   - an ns16550a UART driver (init for 115200 8N1, putc/puts, hex/dec
  *     printing)
  *   - "check": a generic named pass/fail comparator that prints its
  *     verdict over the UART and tracks a running failure count
@@ -32,7 +32,7 @@
  *   +0 RBR/THR/DLL   +1 IER/DLM   +2 IIR/FCR   +3 LCR
  *   +4 MCR           +5 LSR       +6 MSR       +7 SCR
  * LSR bit 5 (0x20) = THRE (transmit holding register empty).
- * At boot, uart_init() programs it for 9600 8N1: interrupts off, DLAB
+ * At boot, uart_init() programs it for 115200 8N1: interrupts off, DLAB
  * set to load the baud divisor, then DLAB cleared with LCR = 8 data
  * bits / no parity / 1 stop bit, FIFOs enabled, and modem control
  * lines (DTR/RTS/OUT2) asserted. See UART_CLK_HZ below -- the divisor
@@ -66,13 +66,13 @@
     .equ UART_LSR,  5              /* line status */
     .equ UART_THRE, 0x20           /* LSR: transmit holding reg empty */
 
-    /* --- 9600 8N1 configuration --- */
+    /* --- 115200 8N1 configuration --- */
     .equ UART_CLK_HZ,   1843200    /* ns16550 reference clock; the classic
                                      * PC/16550 value. Change to match your
                                      * actual UART input clock if different
                                      * (e.g. many SoCs use their peripheral
                                      * bus clock instead). */
-    .equ UART_BAUD,     9600
+    .equ UART_BAUD,     115200
     .equ UART_DIVISOR,  (UART_CLK_HZ / (16 * UART_BAUD))
     .equ UART_DIV_LO,   (UART_DIVISOR & 0xff)
     .equ UART_DIV_HI,   ((UART_DIVISOR >> 8) & 0xff)
@@ -248,7 +248,7 @@ halt:
  *  UART driver (plain, non-compressed, hand written)
  * ======================================================================= */
 
-/* uart_init: program the ns16550a for 9600 8N1, polling mode (no
+/* uart_init: program the ns16550a for 115200 8N1, polling mode (no
  * interrupts). Clobbers t0, t1. Must run before any uart_putc/uart_puts
  * call, and before gp-relative addressing is needed (it uses only an
  * absolute UART_BASE, so it's safe to call this before "la gp, ..." if
@@ -265,7 +265,7 @@ uart_init:
     li      t1, UART_DIV_LO
     sb      t1, UART_DLL(t0)
     li      t1, UART_DIV_HI
-    sb      t1, UART_DLM(t0)        /* divisor -> 9600 baud (see UART_CLK_HZ) */
+    sb      t1, UART_DLM(t0)        /* divisor -> 115200 baud (see UART_CLK_HZ) */
 
     li      t1, UART_LCR_8N1
     sb      t1, UART_LCR(t0)        /* 8 data bits, no parity, 1 stop bit;

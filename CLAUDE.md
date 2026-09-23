@@ -4,7 +4,7 @@ Bare-metal, M-mode RISC-V instruction-set exerciser written in GNU
 assembly, built as two images from the same sources: RV64IMAC and
 RV32IMAC. It boots at `0x80000000`, runs the test suites with deliberately
 adversarial edge-case coverage, and prints OK/FAIL per case plus a summary
-over an ns16550a UART at `0x10000000` (9600 8N1). `README.md` is the
+over an ns16550a UART at `0x10000000` (115200 8N1). `README.md` is the
 detailed design doc; read the relevant section before extending a suite.
 
 Never assume test results. Always assemble, link, disassemble, and run under
@@ -253,7 +253,7 @@ Other notes:
 ## Porting to other hardware/simulators
 
 - The UART clock is `UART_CLK_HZ` in `common.S` (default `1843200`). The
-  9600-baud divisor is computed from it at assemble time.
+  115200-baud divisor is computed from it at assemble time.
 - The code assumes the standard ns16550a register layout with 1-byte
   stride (RBR/THR/DLL @0, IER/DLM @1, FCR @2, LCR @3, MCR @4, LSR @5).
 - The bitx control-transfer tests need about 1 MiB of RAM after the
