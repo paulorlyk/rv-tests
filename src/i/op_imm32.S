@@ -1,17 +1,17 @@
 /* =====================================================================
- * base/op_imm32.S  --  RV64I base-ISA OP-IMM-32 (I-type, word-width)
+ * i/op_imm32.S  --  RV64I base-ISA OP-IMM-32 (I-type, word-width)
  *                       ALU instructions: ADDIW, SLLIW, SRLIW, SRAIW
  *
- * Part of the RV64I base-ISA suite; see base/tests.S for how this
- * plugs into the rest (main_tests.S -> base/tests.S -> here), and
+ * Part of the RV64I base-ISA suite; see i/tests.S for how this
+ * plugs into the rest (main_tests.S -> i/tests.S -> here), and
  * common.S for the boot/UART/reporting harness everything sits on
  * ("check", "uart_puts" are used from there; nothing else).
  *
  * RV64-only: OP-IMM-32 doesn't exist on RV32 (its opcode is reserved
- * there), so on the RV32 image tests_base_op_imm32 is an empty stub
+ * there), so on the RV32 image tests_i_op_imm32 is an empty stub
  * and everything else in this file is assembled out.
  *
- * The word-width twins of base/op_imm.S. The defining rule for all
+ * The word-width twins of i/op_imm.S. The defining rule for all
  * four: the operation is done on the low 32 bits of rs1 only, and the
  * 32-bit result is *sign-extended* from bit 31 into bits 63:32. So the
  * coverage concentrates on the places where that differs from the
@@ -46,7 +46,7 @@
  * also what "sext.w" becomes for rd==rs1 in x1-x31) that the
  * assembler would otherwise substitute.
  *
- * Bit independence across fields (bitx_op_imm32, at the end): every
+ * Bit independence across fields (bitx_i_op_imm32, at the end): every
  * bit pair among rd, rs1 and the immediate -- C(22,2) = 231 cases for
  * ADDIW and C(15,2) = 105 each for SLLIW/SRLIW/SRAIW (5-bit shamt).
  * The expected values are assemble-time constants computed from the
@@ -56,13 +56,14 @@
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
     .option norvc            /* mandatory, not stylistic: see above
                                * (ADDIW -> c.addiw) */
 
     .include "bitx.inc"
 
-    .global tests_base_op_imm32
+    .global tests_i_op_imm32
 
     .section .text
 
@@ -127,6 +128,7 @@
  * outside the swept list (rs1=t3 resp. rd=t2). reg may be a0/a1/a2 --
  * result captured to t2 before those are reused. */
 .macro T_OPIW_RD insn, rdreg, v1, imm, expect, name
+    TEST_BEGIN \name
     LIX     t3, \v1
     \insn   \rdreg, t3, \imm
     mv      t2, \rdreg
@@ -137,6 +139,7 @@
 .endm
 
 .macro T_OPIW_RS1 insn, rs1reg, v1, imm, expect, name
+    TEST_BEGIN \name
     LIX     \rs1reg, \v1
     \insn   t2, \rs1reg, \imm
     la      a0, \name
@@ -148,6 +151,7 @@
 /* T_OPIW_VAL insn, v1, imm, expect, name -- fixed rd=t2/rs1=t3, sweep
  * the source value and immediate. */
 .macro T_OPIW_VAL insn, v1, imm, expect, name
+    TEST_BEGIN \name
     LIX     t3, \v1
     \insn   t2, t3, \imm
     la      a0, \name
@@ -159,6 +163,7 @@
 /* T_OPIW_PRESERVED insn, imm, name -- the instruction must not write
  * back to its source register (all 64 bits of it). */
 .macro T_OPIW_PRESERVED insn, imm, name
+    TEST_BEGIN \name
     LIX     t3, 0x123456789abcdef0
     mv      t5, t3
     \insn   t2, t3, \imm
@@ -168,7 +173,7 @@
     call    check
 .endm
 
-tests_base_op_imm32:
+tests_i_op_imm32:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -190,11 +195,13 @@ tests_base_op_imm32:
     T_OPIW_RS1 addiw, t6,  0xdead000000000064, 23, 123, str_opiw_rs1_t6
 
     /* rs1=x0: both signs of imm */
+    TEST_BEGIN str_opiw_rs1_x0_neg
     addiw   t2, x0, -2048
     la      a0, str_opiw_rs1_x0_neg
     LIX     a1, 0xfffffffffffff800
     mv      a2, t2
     call    check
+    TEST_BEGIN str_opiw_rs1_x0_pos
     addiw   t2, x0, 2047
     la      a0, str_opiw_rs1_x0_pos
     LIX     a1, 0x00000000000007ff
@@ -202,6 +209,7 @@ tests_base_op_imm32:
     call    check
 
     /* rd=x0: must not fault, result discarded */
+    TEST_BEGIN str_opiw_rd_x0
     LIX     t3, 100
     addiw   x0, t3, 23
     la      a0, str_opiw_rd_x0
@@ -209,6 +217,7 @@ tests_base_op_imm32:
     mv      a2, x0
     call    check
 
+    TEST_BEGIN str_opiw_alias_rd_rs1
     /* ===== aliasing (through ADDIW): rd==rs1, across the 32-bit
      * overflow so the sign extension is visible too ===== */
     LIX     t1, 0x000000007fffffff
@@ -285,13 +294,13 @@ tests_base_op_imm32:
     T_OPIW_PRESERVED srliw, 4, str_srliw_rs1_preserved
     T_OPIW_PRESERVED sraiw, 4, str_sraiw_rs1_preserved
 
-    jal     ra, bitx_op_imm32
+    jal     ra, bitx_i_op_imm32
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
     ret
 
-bitx_op_imm32:
+bitx_i_op_imm32:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -310,7 +319,7 @@ bitx_op_imm32:
 
     .else   /* XLEN == 32: OP-IMM-32 doesn't exist */
 
-tests_base_op_imm32:
+tests_i_op_imm32:
     ret
 
     .endif

@@ -2,7 +2,7 @@
  * m/tests.S  --  RV64M/RV32M (integer multiply/divide) instruction-set suite
  *                 (orchestrator)
  *
- * Same role as rvc/tests.S / base/tests.S: defines run_m_tests, the
+ * Same role as c/tests.S / i/tests.S: defines run_m_tests, the
  * entry point main_tests.S calls into, which prints a banner and calls
  * each category file's entry point in turn:
  *

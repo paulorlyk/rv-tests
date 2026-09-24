@@ -14,7 +14,7 @@
  * catches a fault confined to one field, but not a decoder fault where
  * one bit misbehaves only when some *other* bit is set as well -- a
  * bit of rs1 leaking into the logic that selects rd, an immediate bit
- * coupled to a funct bit, and so on. C.ADDI4SPN (rvc/quadrant0.S) was
+ * coupled to a funct bit, and so on. C.ADDI4SPN (c/quadrant0.S) was
  * the first instruction to get the defence: a register x immediate
  * cross-product plus every within-field pair of immediate bits. This
  * file generalises it to every instruction, one bit *pair* at a time:
@@ -25,7 +25,8 @@
  *   fields, and every field not involved holds a fixed "background".
  *
  * That is C(N,2) cases per instruction for N variable bits: 105 for an
- * R-type (3 x 5 register bits), 231 for an I-type (5+5+12), and so on.
+ * R-type (3 x 5 register bits), 231 for an I-type (5+5+12), 136 for an
+ * AMO (3 x 5 register bits + aq/rl), and so on.
  * Every instruction is enumerated separately rather than once per
  * encoding format, because a coupling can just as well involve that
  * instruction's own opcode/funct3/funct7 bits.
@@ -92,7 +93,7 @@
  * constants and the store read-back are register-sized, and BX_LDC
  * truncates assemble-time constants to XLEN bits -- correct for the
  * truncation-safe ops (add, sub, logic, left shifts); anything else
- * must be written in terms of XLEN (see BX_C_CI in rvc/quadrant1.S).
+ * must be written in terms of XLEN (see BX_C_CI in c/quadrant1.S).
  * The counting sled, register candidates and backgrounds are the same
  * on RV32; shift-amount lists shrink to 5 bits there.
  * ===================================================================== */
@@ -127,7 +128,19 @@
  *  Per-case plumbing
  * ======================================================================= */
 
-.macro BX_ENTER
+/* BX_ENTER also announces the case (test_begin) before anything is
+ * swept: by default 94f, the name string the case's first BX_REPORT
+ * defines, so the case macros don't have to pass their name twice; a
+ * case that names its strings up front (BX_NAME, for BX_TRAP_FAILS)
+ * passes that label instead. The call clobbers a0 and ra, which no
+ * case holds across its BX_ENTER. */
+.macro BX_ENTER name=94f
+    .option push
+    .option norvc
+    .option norelax
+    la      a0, \name
+    call    test_begin
+    .option pop
     mv      s11, sp
     mv      s10, gp
     mv      s9, tp
@@ -144,7 +157,7 @@
  * exactly right for the expected values computed here as long as each
  * expression is one whose low 32 bits don't depend on the high ones
  * (add, sub, logic ops, left shifts); right shifts and compares must be
- * written in terms of XLEN (see rvc/quadrant1.S's BX_C_CI). */
+ * written in terms of XLEN (see c/quadrant1.S's BX_C_CI). */
 .macro BX_LDC reg, val
     .pushsection .rodata
     .balign 8
@@ -182,12 +195,52 @@
 .macro BX_REPORT text
     BX_LEAVE
     .pushsection .rodata
-97: .asciz  "\text"
+94: .asciz  "\text"
     .popsection
-    la      a0, 97b
+    la      a0, 94b
     mv      a1, t5
     mv      a2, t6
     call    check
+.endm
+
+/* BX_NAME label, text -- define a case's name string at label (in
+ * .rodata) ahead of use; BX_REPORT_AT label is BX_REPORT for such a
+ * name. Cases whose instruction under test may trap name their
+ * strings this way, because their resume path (BX_TRAP_FAILS) has to
+ * report every one of them, and a numeric 94 label can only reach the
+ * nearest. */
+.macro BX_NAME label, text
+    .pushsection .rodata
+\label: .asciz "\text"
+    .popsection
+.endm
+
+.macro BX_REPORT_AT label
+    BX_LEAVE
+    la      a0, \label
+    mv      a1, t5
+    mv      a2, t6
+    call    check
+.endm
+
+/* BX_TRAP_FAILS resume, label... -- TRAP_FAILS (harness.inc) for a
+ * bitx case: the resume path first puts sp/gp/tp back (BX_LEAVE: the
+ * trap may have come while they were swept; the handler restores
+ * nothing but its own scratch registers), then reports each name with
+ * check_trap. The case arms with TRAP_ARM resume after BX_ENTER,
+ * before any register is swept, and disarms with TRAP_DISARM_R once
+ * the instruction under test has run. */
+.macro BX_TRAP_FAILS resume, names:vararg
+    .option push
+    .option norvc
+    j       .Lbx_trap_fails_done\@
+\resume:
+    BX_LEAVE
+    .irp    n, \names
+    TRAP_REPORT \n
+    .endr
+.Lbx_trap_fails_done\@:
+    .option pop
 .endm
 
 /* =======================================================================
@@ -304,6 +357,51 @@
     .endr
 .endm
 
+/* Three register fields and an immediate field (the AMOs: rd, rs1, rs2
+ * and the 2-bit aq/rl ordering field). */
+.macro BX_E_RRRI case, pass, one1, two1, bg1, one2, two2, bg2, one3, two3, bg3, ione, ibg
+    .irp r, \two1
+    \case \pass, \r, \bg2, \bg3, \ibg
+    .endr
+    .irp r, \two2
+    \case \pass, \bg1, \r, \bg3, \ibg
+    .endr
+    .irp r, \two3
+    \case \pass, \bg1, \bg2, \r, \ibg
+    .endr
+    .irp ra_, \one1
+    .irp rb_, \one2
+    \case \pass, \ra_, \rb_, \bg3, \ibg
+    .endr
+    .endr
+    .irp ra_, \one1
+    .irp rb_, \one3
+    \case \pass, \ra_, \bg2, \rb_, \ibg
+    .endr
+    .endr
+    .irp ra_, \one2
+    .irp rb_, \one3
+    \case \pass, \bg1, \ra_, \rb_, \ibg
+    .endr
+    .endr
+    BX_E_I \case, "\pass, \bg1, \bg2, \bg3", "\ione"
+    .irp ra_, \one1
+    .irp ib, \ione
+    \case \pass, \ra_, \bg2, \bg3, \ib
+    .endr
+    .endr
+    .irp ra_, \one2
+    .irp ib, \ione
+    \case \pass, \bg1, \ra_, \bg3, \ib
+    .endr
+    .endr
+    .irp ra_, \one3
+    .irp ib, \ione
+    \case \pass, \bg1, \bg2, \ra_, \ib
+    .endr
+    .endr
+.endm
+
 /* Shorthands that fill in the register candidate lists (see the file
  * header): "5" = a full 5-bit field, "3" = a compressed x8-x15 field
  * with background x8. The files are fed straight to "as" (no C
@@ -331,6 +429,10 @@
 
 .macro BX_E_RRR5 case, pass
     BX_E_RRR \case, "\pass", "1,2,4,8,16", "3,5,6,9,10,12,17,18,20,24", 7, "1,2,4,8,16", "3,5,6,9,10,12,17,18,20,24", 28, "1,2,4,8,16", "3,5,6,9,10,12,17,18,20,24", 29
+.endm
+
+.macro BX_E_RRRI5 case, pass, ione, ibg
+    BX_E_RRRI \case, "\pass", "1,2,4,8,16", "3,5,6,9,10,12,17,18,20,24", 7, "1,2,4,8,16", "3,5,6,9,10,12,17,18,20,24", 28, "1,2,4,8,16", "3,5,6,9,10,12,17,18,20,24", 29, "\ione", \ibg
 .endm
 
 .macro BX_E_RRI5 case, pass, bg1, bg2, ione, ibg
@@ -417,7 +519,7 @@
     lhu     t4, bx_tpl_cnop
     sh      t4, 2(s3)
     .endif
-    fence.i
+    SYNC_I  t4
 .endm
 
 .macro BX_GO site
@@ -428,7 +530,7 @@
     lhu     t4, bx_tpl_slot
     sh      t4, 0(s3)
     sh      t4, 2(s3)
-    fence.i
+    SYNC_I  t4
     .endif
 .endm
 

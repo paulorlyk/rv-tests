@@ -8,7 +8,7 @@
  * "uart_puts" are used from there; nothing else).
  *
  * All five share the R-type OP/OP-32 encoding with funct7=0000001, so
- * the same organising idea as base/op_alu.S: the register fields carry
+ * the same organising idea as i/op_alu.S: the register fields carry
  * identical decode risk whichever of the five it is, so rd/rs1/rs2 and
  * their aliasing combinations are swept *once*, through MUL. The real
  * per-instruction depth goes into the arithmetic.
@@ -45,6 +45,7 @@
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
     .option norvc            /* not strictly needed (there are no compressed
                                * multiplies), but every non-RVC suite file
@@ -67,6 +68,7 @@
  * outside the swept list. reg may be a0/a1/a2 -- result captured to t2
  * before those are reused. */
 .macro T_M_RD insn, rdreg, v1, v2, expect, name
+    TEST_BEGIN \name
     LIX     t3, \v1
     LIX     t4, \v2
     \insn   \rdreg, t3, t4
@@ -78,6 +80,7 @@
 .endm
 
 .macro T_M_RS1 insn, rs1reg, v1, v2, expect, name
+    TEST_BEGIN \name
     LIX     \rs1reg, \v1
     LIX     t4, \v2
     \insn   t2, \rs1reg, t4
@@ -88,6 +91,7 @@
 .endm
 
 .macro T_M_RS2 insn, rs2reg, v1, v2, expect, name
+    TEST_BEGIN \name
     LIX     t3, \v1
     LIX     \rs2reg, \v2
     \insn   t2, t3, \rs2reg
@@ -100,6 +104,7 @@
 /* T_M_VAL insn, v1, v2, expect, name -- fixed rd=t2/rs1=t3/rs2=t4,
  * sweep the operand values. */
 .macro T_M_VAL insn, v1, v2, expect, name
+    TEST_BEGIN \name
     LIX     t3, \v1
     LIX     t4, \v2
     \insn   t2, t3, t4
@@ -112,6 +117,7 @@
 /* T_M_PRESERVED insn, name1, name2 -- the instruction must not write
  * back to either source register. */
 .macro T_M_PRESERVED insn, name1, name2
+    TEST_BEGIN \name1
     LIXT    t3, 0x123456789abcdef0
     LIXT    t4, 0x0fedcba987654321
     mv      t5, t3
@@ -121,6 +127,7 @@
     mv      a1, t5
     mv      a2, t3
     call    check
+    TEST_BEGIN \name2
     la      a0, \name2
     mv      a1, t6
     mv      a2, t4
@@ -155,6 +162,7 @@ tests_m_mul:
     T_M_RS2 mul, t6,  12, 11, 132, str_m_rs2_t6
 
     /* rd=x0: must not fault, result discarded */
+    TEST_BEGIN str_m_rd_x0
     LIX     t3, 12
     LIX     t4, 11
     mul     x0, t3, t4
@@ -164,6 +172,7 @@ tests_m_mul:
     call    check
 
     /* ===== aliasing (through MUL): every register-overlap combination ===== */
+    TEST_BEGIN str_m_alias_all_same
     LIX     t1, 13
     mul     t1, t1, t1              /* rd==rs1==rs2: squares itself */
     la      a0, str_m_alias_all_same
@@ -171,6 +180,7 @@ tests_m_mul:
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_m_alias_rd_rs1
     LIX     t1, 13
     LIX     t2, 7
     mul     t1, t1, t2              /* rd==rs1 */
@@ -179,6 +189,7 @@ tests_m_mul:
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_m_alias_rd_rs2
     LIX     t1, 13
     LIX     t2, 7
     mul     t2, t1, t2              /* rd==rs2 */
@@ -187,6 +198,7 @@ tests_m_mul:
     mv      a2, t2
     call    check
 
+    TEST_BEGIN str_m_alias_rs1_rs2
     LIX     t1, 13
     mul     t2, t1, t1              /* rs1==rs2, rd distinct */
     la      a0, str_m_alias_rs1_rs2
@@ -194,6 +206,7 @@ tests_m_mul:
     mv      a2, t2
     call    check
 
+    TEST_BEGIN str_m_alias_mulhu_rd_rs1
     /* high-half ops with rd==rs1: the whole 128-bit product must be
      * formed from the old rs1 before rd is written */
     LIX     t1, 0xffffffffffffffff
@@ -204,6 +217,7 @@ tests_m_mul:
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_m_alias_mulh_all_same
     LIX     t1, INTX_MIN
     mulh    t1, t1, t1
     la      a0, str_m_alias_mulh_all_same
@@ -324,6 +338,7 @@ tests_m_mul:
     T_M_PRESERVED mulhsu, str_mulhsu_rs1_preserved, str_mulhsu_rs2_preserved
     T_M_PRESERVED mulhu,  str_mulhu_rs1_preserved,  str_mulhu_rs2_preserved
 
+    TEST_BEGIN str_mul_fused_hi
     /* ===== recommended fused sequence: MULH rdh, then MUL rdl, same
      *     sources, rdh distinct from both sources ===== */
     .if XLEN == 64
@@ -344,6 +359,7 @@ tests_m_mul:
     .endif
     mv      a2, t1
     call    check
+    TEST_BEGIN str_mul_fused_lo
     la      a0, str_mul_fused_lo
     .if XLEN == 64
     LIX     a1, 0x2236d88fe5618cf0

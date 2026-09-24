@@ -1,27 +1,27 @@
 /* =====================================================================
- * rvc/tests.S  --  RV64/RV32 "C" (compressed) instruction-set exerciser
+ * c/tests.S  --  RV64/RV32 "C" (compressed) instruction-set exerciser
  *                   (RVC suite orchestrator)
  *
  * The RVC test suite is split across four files:
- *   rvc/tests.S      - this file. Defines run_rvc_tests, the entry
+ *   c/tests.S         - this file. Defines run_c_tests, the entry
  *                       point main_tests.S calls into, which prints
  *                       the banner and then calls each quadrant's
  *                       entry point in turn.
- *   rvc/quadrant0.S  - C.ADDI4SPN, C.LW, C.SW, C.LD, C.SD
- *   rvc/quadrant1.S  - C.NOP, C.ADDI, C.ADDIW, C.LI, C.ADDI16SP, C.LUI,
+ *   c/quadrant0.S     - C.ADDI4SPN, C.LW, C.SW, C.LD, C.SD
+ *   c/quadrant1.S     - C.NOP, C.ADDI, C.ADDIW, C.LI, C.ADDI16SP, C.LUI,
  *                       C.SRLI, C.SRAI, C.ANDI, C.SUB, C.XOR, C.OR,
  *                       C.AND, C.SUBW, C.ADDW, C.J, C.BEQZ, C.BNEZ
- *   rvc/quadrant2.S  - C.SLLI, C.LWSP, C.LDSP, C.JR, C.MV, C.EBREAK,
+ *   c/quadrant2.S     - C.SLLI, C.LWSP, C.LDSP, C.JR, C.MV, C.EBREAK,
  *                       C.JALR, C.ADD, C.SWSP, C.SDSP
  * The quadrant grouping matches the RVC spec's own opcode layout (bits
  * [1:0] of the 16-bit instruction select the quadrant), and each file
- * only exposes one symbol (tests_quadrantN) to the others -- their
+ * only exposes one symbol (tests_c_quadrantN) to the others -- their
  * per-instruction test subroutines and macros stay local. All boot/
  * UART/reporting plumbing lives in common.S; every file here just uses
  * "check" (compare + report) and "uart_puts" from it.
  *
  * This is one of possibly several instruction-set suites main_tests.S
- * calls into (see base/tests.S for the RV64I base-ISA suite) -- see
+ * calls into (see i/tests.S for the RV64I base-ISA suite) -- see
  * that file's header for how a new suite plugs in.
  *
  * Every one of the 33 integer RVC instructions (RV64C, no D/F ext) is
@@ -48,7 +48,7 @@
  * RV32 image (see xlen.inc and README "RV64 and RV32"): C.LD, C.SD,
  * C.LDSP, C.SDSP, C.ADDIW, C.SUBW and C.ADDW are RV64C-only and left
  * out (on RV32C the first four encodings are C.FLW/C.FSW/C.FLWSP/
- * C.FSWSP, out of scope as above); C.JAL is added (rvc/quadrant1.S);
+ * C.FSWSP, out of scope as above); C.JAL is added (c/quadrant1.S);
  * the compressed shifts take a 5-bit shamt.
  * ===================================================================== */
 
@@ -56,24 +56,24 @@
 
     .option norvc
 
-    .global run_rvc_tests
+    .global run_c_tests
 
     .section .text
 
 /* ----------------------------------------------------------------------
- * run_rvc_tests: RVC suite entry point, called once by main_tests.S.
- * tests_quadrant0/1/2 are each defined in their own file (see header).
+ * run_c_tests: RVC suite entry point, called once by main_tests.S.
+ * tests_c_quadrant0/1/2 are each defined in their own file (see header).
  * -------------------------------------------------------------------- */
-run_rvc_tests:
+run_c_tests:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
     la      a0, str_banner
     call    uart_puts
 
-    call    tests_quadrant0
-    call    tests_quadrant1
-    call    tests_quadrant2
+    call    tests_c_quadrant0
+    call    tests_c_quadrant1
+    call    tests_c_quadrant2
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16

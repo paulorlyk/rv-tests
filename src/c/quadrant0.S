@@ -1,17 +1,17 @@
 /* =====================================================================
- * rvc/quadrant0.S  --  RVC quadrant 0 (compressed opcode bits[1:0]=00):
+ * c/quadrant0.S  --  RVC quadrant 0 (compressed opcode bits[1:0]=00):
  *                       C.ADDI4SPN, C.LW, C.SW, C.LD, C.SD
  *
- * Part of the RV64C test suite; see rvc/tests.S for the overall
+ * Part of the RV64C test suite; see c/tests.S for the overall
  * structure and common.S for the boot/UART/reporting harness this
  * builds on ("check", "uart_puts", etc. are provided there). This
- * file's only entry point called from outside is tests_quadrant0,
- * invoked once by run_tests (in rvc/tests.S).
+ * file's only entry point called from outside is tests_c_quadrant0,
+ * invoked once by run_tests (in c/tests.S).
  *
- * word_buf/dword_buf (defined here) are also used by rvc/quadrant1.S's
+ * word_buf/dword_buf (defined here) are also used by c/quadrant1.S's
  * C.NOP memory-unaffected check, hence .global.
  *
- * Bit independence across fields (bitx_quadrant0, called last): every
+ * Bit independence across fields (bitx_c_quadrant0, called last): every
  * bit pair among rd'/rs2', rs1' and the offset set together for C.LW,
  * C.LD, C.SW and C.SD, 55 cases each (see the BX_C_CL/BX_C_CS block and
  * bitx.inc). C.ADDI4SPN's own cross-product and pairwise tests, the
@@ -22,6 +22,7 @@
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
     .option norvc            /* c.* instructions are wrapped in their own */
                               /* .option rvc / .option norvc pair so every */
@@ -29,7 +30,7 @@
 
     .include "bitx.inc"
 
-    .global tests_quadrant0
+    .global tests_c_quadrant0
     .global word_buf
     .global dword_buf
 
@@ -99,6 +100,7 @@
  *   to t2 immediately, before a0-a2 are repurposed, so this is safe.
  */
 .macro T_A4SPN_REG rdreg, name
+    TEST_BEGIN \name
     mv      t1, sp
     addi    t1, t1, 4
     .option rvc
@@ -119,6 +121,7 @@
  *   bugs that a single "one nice round number" test would miss.
  */
 .macro T_A4SPN_IMM imm, name
+    TEST_BEGIN \name
     mv      t1, sp
     addi    t1, t1, \imm
     .option rvc
@@ -142,6 +145,7 @@
  *   goes unchecked. Same a0/a1/a2 safety as T_A4SPN_REG.
  */
 .macro T_A4SPN_CROSS rdreg, imm, name
+    TEST_BEGIN \name
     mv      t1, sp
     addi    t1, t1, \imm
     .option rvc
@@ -166,6 +170,7 @@
  *   guaranteed to exercise.
  */
 .macro T_A4SPN_PAIR imm, name
+    TEST_BEGIN \name
     mv      t1, sp
     addi    t1, t1, \imm
     .option rvc
@@ -236,6 +241,7 @@ test_c_addi4spn:
     T_A4SPN_IMM 680,  str_a4spn_imm680    /* nzuimm/4 = 0b10101010 */
 
     /* --- invariant: C.ADDI4SPN must not modify sp itself, only rd' --- */
+    TEST_BEGIN str_a4spn_sp_preserved
     mv      t3, sp
     .option rvc
     c.addi4spn s0, sp, 24
@@ -369,6 +375,7 @@ test_c_addi4spn:
     T_A4SPN_PAIR 640 , str_a4spn_pair_b7_b9
     T_A4SPN_PAIR 768 , str_a4spn_pair_b8_b9
 
+    TEST_BEGIN str_a4spn_sp_preserved_2
     /* --- sp-preserved invariant, re-checked at a spread of different
      *     (rd', nzuimm) combinations from the cross-product above, not
      *     just the single case already covered -- a bit-coupling bug
@@ -383,6 +390,7 @@ test_c_addi4spn:
     mv      a2, sp
     call    check
 
+    TEST_BEGIN str_a4spn_sp_preserved_3
     mv      t3, sp
     .option rvc
     c.addi4spn a5, sp, 1020      /* max, all bits */
@@ -392,6 +400,7 @@ test_c_addi4spn:
     mv      a2, sp
     call    check
 
+    TEST_BEGIN str_a4spn_sp_preserved_4
     mv      t3, sp
     .option rvc
     c.addi4spn s1, sp, 340       /* alternating pattern */
@@ -417,6 +426,7 @@ test_c_addi4spn:
  * rdreg is s0. Result copied to t2 before a0-a2 are reused, so rdreg
  * may itself be a0/a1/a2. */
 .macro T_LW_RD rdreg, name
+    TEST_BEGIN \name
     la      s0, word_buf
     LIX     t0, 0x11223344
     sw      t0, 0(s0)
@@ -435,6 +445,7 @@ test_c_addi4spn:
  * basereg is a4. The base register is consumed by the load itself
  * before a0-a2 are reused, so basereg may itself be a0/a1/a2. */
 .macro T_LW_RS1 basereg, name
+    TEST_BEGIN \name
     la      \basereg, word_buf
     LIX     t0, 0x11223344
     sw      t0, 0(\basereg)
@@ -450,6 +461,7 @@ test_c_addi4spn:
 /* T_LW_OFF off, name -- sweep every individual bit (and boundary/mixed
  * values) of the scrambled 5-bit offset field, fixed rd'=a4, rs1'=s0. */
 .macro T_LW_OFF off, name
+    TEST_BEGIN \name
     la      s0, word_buf
     LIX     t0, 0x11223344
     sw      t0, \off(s0)
@@ -467,6 +479,7 @@ test_c_addi4spn:
  * (or correctly absent) for each. expect64 is the full 64-bit value
  * the destination register must hold after the sign-extending load. */
 .macro T_LW_VAL val, expect64, name
+    TEST_BEGIN \name
     la      s0, word_buf
     LIX     t0, \val
     sw      t0, 0(s0)
@@ -525,6 +538,7 @@ test_c_lw:
     T_LW_VAL 0x00000001, 0x0000000000000001, str_lw_val_one
 
     /* --- invariants: C.LW must not modify rs1' or memory (pure read) --- */
+    TEST_BEGIN str_lw_rs1_preserved
     la      s0, word_buf
     LIX     t0, 0xcafed00d
     sw      t0, 0(s0)
@@ -537,6 +551,7 @@ test_c_lw:
     mv      a2, s0
     call    check
 
+    TEST_BEGIN str_lw_mem_unchanged
     LWUX    t4, 0(s0)               /* lwu (zero-extend) so the check isn't
                                       * confused by sign-extension noise --
                                       * 0xcafed00d has bit 31 set */
@@ -565,6 +580,7 @@ test_c_lw:
  * may be a0/a1/a2 -- memory is read back into t2 before a0-a2 are
  * reused. */
 .macro T_SW_RS2 srcreg, name
+    TEST_BEGIN \name
     la      s0, word_buf
     LIX     \srcreg, 0x11223344
     .option rvc
@@ -582,6 +598,7 @@ test_c_lw:
  * basereg may be a0/a1/a2 -- consumed as the read-back address before
  * a0-a2 are reused. */
 .macro T_SW_RS1 basereg, name
+    TEST_BEGIN \name
     la      \basereg, word_buf
     LIX     a4, 0x11223344
     .option rvc
@@ -601,6 +618,7 @@ test_c_lw:
  * by T_SW_RS2's sweep) and once at a4 (fills the rs1'=a4 gap left by
  * T_SW_RS1's sweep), giving full 8-register coverage of both fields. */
 .macro T_SW_ALIAS reg, name
+    TEST_BEGIN \name
     la      \reg, word_buf
     mv      t1, \reg
     .option rvc
@@ -617,6 +635,7 @@ test_c_lw:
 /* T_SW_OFF off, name -- sweep every individual bit (and boundary/mixed
  * values) of the scrambled 5-bit offset field, fixed rs1'=s0, rs2'=a4. */
 .macro T_SW_OFF off, name
+    TEST_BEGIN \name
     la      s0, word_buf
     LIX     a4, 0x11223344
     .option rvc
@@ -632,6 +651,7 @@ test_c_lw:
 /* T_SW_VAL val, name -- sweep 32-bit data patterns through a fixed
  * rs1'=s0/rs2'=a4/offset=0. */
 .macro T_SW_VAL val, name
+    TEST_BEGIN \name
     la      s0, word_buf
     LIX     a4, \val
     .option rvc
@@ -693,6 +713,7 @@ test_c_sw:
     T_SW_VAL 0x00000001, str_sw_val_one
 
     .if XLEN == 64                  /* RV32 registers have no upper 32 bits */
+    TEST_BEGIN str_sw_upper_bits_ignored
     /* --- edge case: source register has non-zero upper 32 bits; only
      *     the low 32 bits may be written to memory --- */
     la      s0, word_buf
@@ -708,6 +729,7 @@ test_c_sw:
     .endif
 
     /* --- invariant: C.SW touches exactly 4 bytes, nothing adjacent --- */
+    TEST_BEGIN str_sw_adjacent_before
     la      s0, word_buf
     LIX     t0, 0xaaaaaaaa
     sw      t0, 60(s0)              /* sentinel word before target */
@@ -724,12 +746,14 @@ test_c_sw:
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_sw_adjacent_after
     LWUX    t1, 68(s0)
     la      a0, str_sw_adjacent_after
     LIX     a1, 0xbbbbbbbb
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_sw_target_correct
     LWUX    t1, 64(s0)
     la      a0, str_sw_target_correct
     LIX     a1, 0x11223344
@@ -737,6 +761,7 @@ test_c_sw:
     call    check
 
     /* --- invariants: C.SW must not modify rs1' or rs2' (pure write) --- */
+    TEST_BEGIN str_sw_rs1_preserved
     la      s0, word_buf
     LIX     a4, 0xcafed00d
     mv      t1, s0
@@ -749,6 +774,7 @@ test_c_sw:
     mv      a2, s0
     call    check
 
+    TEST_BEGIN str_sw_rs2_preserved
     la      a0, str_sw_rs2_preserved
     mv      a1, t2
     mv      a2, a4
@@ -768,6 +794,7 @@ test_c_sw:
  * ======================================================================= */
 
 .macro T_SD_RS2 srcreg, name
+    TEST_BEGIN \name
     la      s0, dword_buf
     LIX     \srcreg, 0x1122334455667788
     .option rvc
@@ -781,6 +808,7 @@ test_c_sw:
 .endm
 
 .macro T_SD_RS1 basereg, name
+    TEST_BEGIN \name
     la      \basereg, dword_buf
     LIX     a4, 0x1122334455667788
     .option rvc
@@ -798,6 +826,7 @@ test_c_sw:
  * source and the stored data, so the memory content should just equal
  * the register's own (address) value, in full. */
 .macro T_SD_ALIAS reg, name
+    TEST_BEGIN \name
     la      \reg, dword_buf
     mv      t1, \reg
     .option rvc
@@ -811,6 +840,7 @@ test_c_sw:
 .endm
 
 .macro T_SD_OFF off, name
+    TEST_BEGIN \name
     la      s0, dword_buf
     LIX     a4, 0x1122334455667788
     .option rvc
@@ -824,6 +854,7 @@ test_c_sw:
 .endm
 
 .macro T_SD_VAL val, name
+    TEST_BEGIN \name
     la      s0, dword_buf
     LIX     a4, \val
     .option rvc
@@ -889,6 +920,7 @@ test_c_sd:
     T_SD_VAL 0x0000000000000001, str_sd_val_one
 
     /* --- invariant: C.SD touches exactly 8 bytes, nothing adjacent --- */
+    TEST_BEGIN str_sd_adjacent_before
     la      s0, dword_buf
     LIXT    t0, 0xaaaaaaaaaaaaaaaa
     sd      t0, 120(s0)             /* sentinel doubleword before target */
@@ -905,12 +937,14 @@ test_c_sd:
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_sd_adjacent_after
     ld      t1, 136(s0)
     la      a0, str_sd_adjacent_after
     LIXT    a1, 0xbbbbbbbbbbbbbbbb
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_sd_target_correct
     ld      t1, 128(s0)
     la      a0, str_sd_target_correct
     LIX     a1, 0x1122334455667788
@@ -918,6 +952,7 @@ test_c_sd:
     call    check
 
     /* --- invariants: C.SD must not modify rs1' or rs2' (pure write) --- */
+    TEST_BEGIN str_sd_rs1_preserved
     la      s0, dword_buf
     LIXT    a4, 0xcafebabedeadbeef
     mv      t1, s0
@@ -930,6 +965,7 @@ test_c_sd:
     mv      a2, s0
     call    check
 
+    TEST_BEGIN str_sd_rs2_preserved
     la      a0, str_sd_rs2_preserved
     mv      a1, t2
     mv      a2, a4
@@ -947,6 +983,7 @@ test_c_sd:
  * ======================================================================= */
 
 .macro T_LD_RD rdreg, name
+    TEST_BEGIN \name
     la      s0, dword_buf
     LIX     t0, 0x1122334455667788
     sd      t0, 0(s0)
@@ -961,6 +998,7 @@ test_c_sd:
 .endm
 
 .macro T_LD_RS1 basereg, name
+    TEST_BEGIN \name
     la      \basereg, dword_buf
     LIX     t0, 0x1122334455667788
     sd      t0, 0(\basereg)
@@ -974,6 +1012,7 @@ test_c_sd:
 .endm
 
 .macro T_LD_OFF off, name
+    TEST_BEGIN \name
     la      s0, dword_buf
     LIX     t0, 0x1122334455667788
     sd      t0, \off(s0)
@@ -987,6 +1026,7 @@ test_c_sd:
 .endm
 
 .macro T_LD_VAL val, name
+    TEST_BEGIN \name
     la      s0, dword_buf
     LIX     t0, \val
     sd      t0, 0(s0)
@@ -1045,6 +1085,7 @@ test_c_ld:
     T_LD_VAL 0x0000000000000001, str_ld_val_one
 
     /* --- invariants: C.LD must not modify rs1' or memory (pure read) --- */
+    TEST_BEGIN str_ld_rs1_preserved
     la      s0, dword_buf
     LIXT    t0, 0xcafebabedeadbeef
     sd      t0, 0(s0)
@@ -1057,6 +1098,7 @@ test_c_ld:
     mv      a2, s0
     call    check
 
+    TEST_BEGIN str_ld_mem_unchanged
     ld      t4, 0(s0)
     la      a0, str_ld_mem_unchanged
     LIXT    a1, 0xcafebabedeadbeef
@@ -1072,7 +1114,7 @@ test_c_ld:
 /* =======================================================================
  *  QUADRANT 0 : C.ADDI4SPN, C.LW, C.LD, C.SW, C.SD
  * ======================================================================= */
-tests_quadrant0:
+tests_c_quadrant0:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -1090,13 +1132,13 @@ tests_quadrant0:
     jal     ra, test_c_ld
     .endif
 
-    jal     ra, bitx_quadrant0
+    jal     ra, bitx_c_quadrant0
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
     ret
 
-bitx_quadrant0:
+bitx_c_quadrant0:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 

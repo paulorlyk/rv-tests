@@ -51,6 +51,7 @@
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
     .option norvc            /* see m/mul.S */
 
@@ -63,6 +64,7 @@
 /* T_M_VAL insn, v1, v2, expect, name -- fixed rd=t2/rs1=t3/rs2=t4,
  * sweep the operand values. */
 .macro T_M_VAL insn, v1, v2, expect, name
+    TEST_BEGIN \name
     LIX     t3, \v1
     LIX     t4, \v2
     \insn   t2, t3, t4
@@ -75,6 +77,7 @@
 /* T_M_PRESERVED insn, name1, name2 -- the instruction must not write
  * back to either source register. */
 .macro T_M_PRESERVED insn, name1, name2
+    TEST_BEGIN \name1
     LIXT    t3, 0x123456789abcdef0
     LIXT    t4, 0x0fedcba987654321
     mv      t5, t3
@@ -84,6 +87,7 @@
     mv      a1, t5
     mv      a2, t3
     call    check
+    TEST_BEGIN \name2
     la      a0, \name2
     mv      a1, t6
     mv      a2, t4
@@ -199,6 +203,7 @@ tests_m_div:
     T_M_PRESERVED rem,  str_rem_rs1_preserved,  str_rem_rs2_preserved
     T_M_PRESERVED remu, str_remu_rs1_preserved, str_remu_rs2_preserved
 
+    TEST_BEGIN str_div_alias_rd_rs1
     /* ===== aliasing: rd overwrites a source still needed by a
      *     multi-cycle divider ===== */
     LIX     t1, 100
@@ -209,6 +214,7 @@ tests_m_div:
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_div_alias_rd_rs2
     LIX     t1, 100
     LIX     t2, 7
     div     t2, t1, t2              /* rd==rs2 */
@@ -217,6 +223,7 @@ tests_m_div:
     mv      a2, t2
     call    check
 
+    TEST_BEGIN str_rem_alias_rd_rs2
     LIX     t1, 100
     LIX     t2, 7
     rem     t2, t1, t2              /* rd==rs2 */
@@ -225,6 +232,7 @@ tests_m_div:
     mv      a2, t2
     call    check
 
+    TEST_BEGIN str_div_alias_all_same
     LIX     t1, -9
     div     t1, t1, t1              /* rd==rs1==rs2: x/x = 1 */
     la      a0, str_div_alias_all_same
@@ -232,6 +240,7 @@ tests_m_div:
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_remu_alias_all_same
     LIX     t1, -9
     remu    t1, t1, t1              /* rd==rs1==rs2: x%x = 0 */
     la      a0, str_remu_alias_all_same
@@ -240,6 +249,7 @@ tests_m_div:
     call    check
 
     /* rd=x0 on a divide-by-zero: must not trap, result discarded */
+    TEST_BEGIN str_div_rd_x0
     LIX     t3, 5
     div     x0, t3, x0
     la      a0, str_div_rd_x0
@@ -247,6 +257,7 @@ tests_m_div:
     mv      a2, x0
     call    check
 
+    TEST_BEGIN str_divrem_fused_q
     /* ===== recommended fused sequence DIV rdq; REM rdr, plus the
      *     identity q*divisor + r == dividend ===== */
     LIX     t3, -1000003
@@ -259,10 +270,12 @@ tests_m_div:
     LIX     a1, -10309
     mv      a2, s0
     call    check
+    TEST_BEGIN str_divrem_fused_r
     la      a0, str_divrem_fused_r
     LIX     a1, -30
     mv      a2, s1
     call    check
+    TEST_BEGIN str_divrem_identity
     LIX     t4, 97
     mul     t1, s0, t4
     add     t1, t1, s1
@@ -271,6 +284,7 @@ tests_m_div:
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_divremu_fused_q
     .if XLEN == 64
     LIX     t3, 0xfedcba9876543210
     .else
@@ -289,6 +303,7 @@ tests_m_div:
     .endif
     mv      a2, s0
     call    check
+    TEST_BEGIN str_divremu_fused_r
     la      a0, str_divremu_fused_r
     .if XLEN == 64
     LIX     a1, 0x0000000000000048

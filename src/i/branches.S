@@ -1,9 +1,9 @@
 /* =====================================================================
- * base/branches.S  --  RV64I base-ISA branches: BEQ, BNE, BLT, BGE,
+ * i/branches.S  --  RV64I base-ISA branches: BEQ, BNE, BLT, BGE,
  *                       BLTU, BGEU
  *
- * Part of the RV64I base-ISA suite; see base/tests.S for how this
- * plugs into the rest (main_tests.S -> base/tests.S -> here), and
+ * Part of the RV64I base-ISA suite; see i/tests.S for how this
+ * plugs into the rest (main_tests.S -> i/tests.S -> here), and
  * common.S for the boot/UART/reporting harness everything sits on
  * ("check", "uart_puts" are used from there; nothing else).
  *
@@ -34,7 +34,7 @@
  * The 12-bit branch offset is a B-type field scrambled across
  * non-adjacent bits (imm[12|10:5] and imm[4:1|11]), identical in all
  * six instructions -- so it's swept once, through BEQ, rather than six
- * times over. Same scoping rationale as base/jal.S: every bit of the
+ * times over. Same scoping rationale as i/jal.S: every bit of the
  * low 12 is covered in both directions; the range extends to ~+-4KB
  * and the construction cost of the top bits isn't worth the binary
  * size. Offsets are built from .rept-generated 4-byte nop fillers and
@@ -42,7 +42,7 @@
  * directly), not trusted from the .rept count -- see the README's note
  * on assembler relaxation for why that matters at boundaries.
  *
- * Bit independence across fields (bitx_base_branches, at the end):
+ * Bit independence across fields (bitx_i_branches, at the end):
  * every bit pair among rs1, rs2 and the 12-bit offset set together,
  * C(22,2) = 231 cases per instruction less the 10 noted at BX_C_BR, for
  * all six -- the full +-4 KiB offset range, landing in the counting sled
@@ -50,6 +50,7 @@
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
     .option norvc            /* mandatory, not stylistic: BEQ/BNE against
                                * x0 with an x8-x15 register have compressed
@@ -59,7 +60,7 @@
 
     .include "bitx.inc"
 
-    .global tests_base_branches
+    .global tests_i_branches
 
     .section .text
 
@@ -73,7 +74,7 @@
  * fall through.
  *
  * Offset +2 alone (bit 1 crossed with a register bit, 10 cases) is
- * skipped for the same reason as JAL's (base/jal.S): it lands in the
+ * skipped for the same reason as JAL's (i/jal.S): it lands in the
  * branch's own upper half. */
 .macro BX_C_BR insn, teq, nm, rs1, rs2, v
     .if ((\v) - (((\v) & 0x1000) << 1)) > 2
@@ -111,6 +112,7 @@
  *   which lets one macro express both outcomes -- no separate
  *   "taken" and "not taken" variants that could drift apart. */
 .macro T_BR insn, v1, v2, taken, name
+    TEST_BEGIN \name
     LIX     s4, 0
     LIX     t1, \v1
     LIX     t2, \v2
@@ -129,6 +131,7 @@
  * The swept register is consumed by the branch before a0-a2 are
  * reused, so it may itself be a0/a1/a2. */
 .macro T_BR_RS1 reg, name
+    TEST_BEGIN \name
     LIX     s4, 0
     LIXT    s3, 0x5a5a5a5a5a5a5a5a
     LIXT    \reg, 0x5a5a5a5a5a5a5a5a
@@ -142,6 +145,7 @@
 .endm
 
 .macro T_BR_RS2 reg, name
+    TEST_BEGIN \name
     LIX     s4, 0
     LIXT    s3, 0x5a5a5a5a5a5a5a5a
     LIXT    \reg, 0x5a5a5a5a5a5a5a5a
@@ -159,6 +163,7 @@
  * Backward: jump ahead past the filler run first (not under test),
  * then branch back over it. dist = 8 + 4N. */
 .macro T_BR_FWD dist, name
+    TEST_BEGIN \name
     LIX     s4, 0
     LIX     t1, 7
     LIX     t2, 7
@@ -175,6 +180,7 @@
 .endm
 
 .macro T_BR_BWD dist, name
+    TEST_BEGIN \name
     LIX     s4, 0
     LIX     t1, 7
     LIX     t2, 7
@@ -195,7 +201,7 @@
     call    check
 .endm
 
-tests_base_branches:
+tests_i_branches:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -274,6 +280,7 @@ tests_base_branches:
     T_BR bltu, INTX_MAX, INTX_MIN, 1, str_br_maxmin_bltu
     T_BR bgeu, INTX_MAX, INTX_MIN, 0, str_br_maxmin_bgeu
 
+    TEST_BEGIN str_br_alias_beq
     /* ===== rs1 == rs2 aliasing: the same register on both sides. =====
      * Not a hazard (branches write no register), but the comparison
      * must still be self-consistent: x == x, so BEQ/BGE/BGEU are
@@ -288,6 +295,7 @@ tests_base_branches:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_br_alias_bne
     LIX     s4, 0
     LIXT    t1, 0xdeadbeefcafebabe
     bne     t1, t1, 1f
@@ -298,6 +306,7 @@ tests_base_branches:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_br_alias_blt
     LIX     s4, 0
     LIXT    t1, 0xdeadbeefcafebabe
     blt     t1, t1, 1f
@@ -308,6 +317,7 @@ tests_base_branches:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_br_alias_bge
     LIX     s4, 0
     LIXT    t1, 0xdeadbeefcafebabe
     bge     t1, t1, 1f
@@ -318,6 +328,7 @@ tests_base_branches:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_br_alias_bltu
     LIX     s4, 0
     LIXT    t1, 0xdeadbeefcafebabe
     bltu    t1, t1, 1f
@@ -328,6 +339,7 @@ tests_base_branches:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_br_alias_bgeu
     LIX     s4, 0
     LIXT    t1, 0xdeadbeefcafebabe
     bgeu    t1, t1, 1f
@@ -338,6 +350,7 @@ tests_base_branches:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_br_x0_beq_taken
     /* ===== x0 as an operand: comparing against the hardwired zero
      * register, the "branch if (non)zero" idiom. ===== */
     LIX     s4, 0
@@ -350,6 +363,7 @@ tests_base_branches:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_br_x0_beq_nottaken
     LIX     s4, 0
     LIX     t1, 5
     beq     t1, zero, 1f
@@ -360,6 +374,7 @@ tests_base_branches:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_br_x0_blt
     LIX     s4, 0
     LIX     t1, -1
     blt     t1, zero, 1f            /* signed: -1 < 0, taken */
@@ -370,6 +385,7 @@ tests_base_branches:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_br_x0_bltu
     LIX     s4, 0
     LIX     t1, -1
     bltu    t1, zero, 1f            /* unsigned: 0xff..ff > 0, NOT taken */
@@ -419,6 +435,7 @@ tests_base_branches:
     T_BR_BWD 2048, str_br_bwd2048
     T_BR_BWD 4092, str_br_bwdmax
 
+    TEST_BEGIN str_br_loop
     /* ===== a real loop driven by a backward branch, exercised on
      * every iteration but the last ===== */
     LIX     s0, 0
@@ -431,13 +448,13 @@ tests_base_branches:
     mv      a2, s0
     call    check
 
-    jal     ra, bitx_base_branches
+    jal     ra, bitx_i_branches
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
     ret
 
-bitx_base_branches:
+bitx_i_branches:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 

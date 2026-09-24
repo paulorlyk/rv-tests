@@ -1,8 +1,8 @@
 /* =====================================================================
- * base/jal.S  --  RV64I base-ISA JAL (jump and link)
+ * i/jal.S  --  RV64I base-ISA JAL (jump and link)
  *
- * Part of the RV64I base-ISA suite; see base/tests.S for how this
- * plugs into the rest (main_tests.S -> base/tests.S -> here), and
+ * Part of the RV64I base-ISA suite; see i/tests.S for how this
+ * plugs into the rest (main_tests.S -> i/tests.S -> here), and
  * common.S for the boot/UART/reporting harness everything sits on
  * ("check", "uart_puts" are used from there; nothing else).
  *
@@ -39,7 +39,7 @@
  * a scale this suite doesn't consider worth the binary size and build
  * time it would cost.
  *
- * Bit independence across fields (bitx_base_jal, at the end): every bit
+ * Bit independence across fields (bitx_i_jal, at the end): every bit
  * pair among rd and the 20-bit offset set together, C(25,2) = 300
  * cases less the 5 noted at BX_C_JAL, each checked for both the landing
  * point and the link value. The full +-1 MiB reach is covered here --
@@ -48,8 +48,9 @@
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
-    .option norvc            /* mandatory, not stylistic -- see base/loads.S.
+    .option norvc            /* mandatory, not stylistic -- see i/loads.S.
                                * (Moot for JAL itself, which has no RV64
                                * compressed form to be silently substituted
                                * for -- but filler/bookkeeping code in this
@@ -59,7 +60,7 @@
 
     .include "bitx.inc"
 
-    .global tests_base_jal
+    .global tests_i_jal
 
     .section .text
 
@@ -113,6 +114,7 @@
  * t-register) immediately, since it must survive across two check()
  * calls and check() clobbers t0-t6. */
 .macro T_JAL_REG rdreg, name_landed, name_link
+    TEST_BEGIN \name_landed
     LIX     s4, 0
 .Ljal_reg\@:
     jal     \rdreg, 1f
@@ -124,6 +126,7 @@
     mv      a2, s4
     call    check
 
+    TEST_BEGIN \name_link
     la      t3, .Ljal_reg\@
     addi    t3, t3, 4               /* expected link = this JAL's addr + 4 */
     la      a0, \name_link
@@ -137,6 +140,7 @@
  * here, not the link register -- that's T_JAL_REG's job). Structure:
  * jal(4) + poison li(4) + N nop fillers(4N), dist = 8 + 4N. */
 .macro T_JAL_FWD dist, name
+    TEST_BEGIN \name
     LIX     s2, 0
 .Ljal_fwd\@:
     jal     zero, 1f
@@ -158,6 +162,7 @@
  * success marker. dist = 8 + 4N (4 for the success-marker li, 4 for
  * the bookkeeping jump past the filler, 4N for N nop fillers). */
 .macro T_JAL_BWD dist, name
+    TEST_BEGIN \name
     LIX     s2, 0
     jal     zero, 5f
 4:
@@ -176,7 +181,7 @@
     call    check
 .endm
 
-tests_base_jal:
+tests_i_jal:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -188,6 +193,7 @@ tests_base_jal:
     T_JAL_REG s10, str_jal_landed_s10, str_jal_link_s10
     T_JAL_REG t6,  str_jal_landed_t6,  str_jal_link_t6
 
+    TEST_BEGIN str_jal_rd_x0
     /* --- rd=x0: the standard "plain unconditional jump" idiom, not
      *     just a degenerate case --- */
     LIX     s4, 0
@@ -199,6 +205,7 @@ tests_base_jal:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_jal_fwd4
     /* --- minimum forward offset with no room for a poison (jal itself
      *     is already 4 bytes, using the whole budget): just confirms
      *     it doesn't crash and lands on the very next instruction --- */
@@ -222,6 +229,7 @@ tests_base_jal:
     T_JAL_FWD 2048, str_jal_fwd2048
     T_JAL_FWD 4096, str_jal_fwd4096
 
+    TEST_BEGIN str_jal_fwd_oddbit
     /* --- the one low-order bit a run of 4-byte fillers can never
      *     reach on its own (offset%4==2): a single inert c.nop (not
      *     under test, just 2 bytes of padding) proves it's wired --- */
@@ -253,6 +261,7 @@ tests_base_jal:
     T_JAL_BWD 2048, str_jal_bwd2048
     T_JAL_BWD 4096, str_jal_bwd4096
 
+    TEST_BEGIN str_jal_loop
     /* --- repeated use as a loop's "continue" edge (rd=x0, matching
      *     real-world for-loop codegen), exercised on every iteration
      *     but the last, not just a single one-shot distance --- */
@@ -268,13 +277,13 @@ tests_base_jal:
     mv      a2, s0
     call    check
 
-    jal     ra, bitx_base_jal
+    jal     ra, bitx_i_jal
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
     ret
 
-bitx_base_jal:
+bitx_i_jal:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 

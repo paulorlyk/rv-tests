@@ -1,20 +1,20 @@
 /* =====================================================================
- * rvc/quadrant1.S  --  RVC quadrant 1 (compressed opcode bits[1:0]=01):
+ * c/quadrant1.S  --  RVC quadrant 1 (compressed opcode bits[1:0]=01):
  *                       C.NOP, C.ADDI, C.ADDIW, C.LI, C.ADDI16SP,
  *                       C.LUI, C.SRLI, C.SRAI, C.ANDI, C.SUB, C.XOR,
  *                       C.OR, C.AND, C.SUBW, C.ADDW, C.J, C.BEQZ,
  *                       C.BNEZ; C.JAL (RV32 image only)
  *
- * Part of the RV64C test suite; see rvc/tests.S for the overall
+ * Part of the RV64C test suite; see c/tests.S for the overall
  * structure and common.S for the boot/UART/reporting harness this
  * builds on ("check", "uart_puts", etc. are provided there). This
- * file's only entry point called from outside is tests_quadrant1,
- * invoked once by run_tests (in rvc/tests.S).
+ * file's only entry point called from outside is tests_c_quadrant1,
+ * invoked once by run_tests (in c/tests.S).
  *
  * The C.NOP memory-unaffected check uses word_buf, defined and
- * .global'd in rvc/quadrant0.S.
+ * .global'd in c/quadrant0.S.
  *
- * Bit independence across fields (bitx_quadrant1, called last): every
+ * Bit independence across fields (bitx_c_quadrant1, called last): every
  * bit pair among each instruction's variable fields set together, for
  * every instruction here except C.NOP (no variable fields): 55 cases
  * for C.ADDI/C.ADDIW/C.LI/C.J/C.BEQZ/C.BNEZ, 49 for C.LUI, 36 for
@@ -28,12 +28,13 @@
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
     .option norvc
 
     .include "bitx.inc"
 
-    .global tests_quadrant1
+    .global tests_c_quadrant1
 
     .section .text
 
@@ -275,6 +276,7 @@
  *  singly or back-to-back.
  * ======================================================================= */
 test_c_nop:
+    TEST_BEGIN str_nop_t0
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -291,28 +293,34 @@ test_c_nop:
     LIXT    a1, 0x1111111111111111
     mv      a2, s0
     call    check
+    TEST_BEGIN str_nop_t1
     la      a0, str_nop_t1
     LIXT    a1, 0x2222222222222222
     mv      a2, s1
     call    check
+    TEST_BEGIN str_nop_t2
     la      a0, str_nop_t2
     LIXT    a1, 0x3333333333333333
     mv      a2, s3
     call    check
+    TEST_BEGIN str_nop_s0
     la      a0, str_nop_s0
     LIXT    a1, 0x4444444444444444
     mv      a2, s4
     call    check
+    TEST_BEGIN str_nop_s1
     la      a0, str_nop_s1
     LIXT    a1, 0x5555555555555555
     mv      a2, s5
     call    check
+    TEST_BEGIN str_nop_a3
     la      a0, str_nop_a3
     LIXT    a1, 0x6666666666666666
     mv      a2, a3
     call    check
 
     /* --- sp unaffected --- */
+    TEST_BEGIN str_nop_sp
     mv      t3, sp
     .option rvc
     c.nop
@@ -323,6 +331,7 @@ test_c_nop:
     call    check
 
     /* --- memory unaffected --- */
+    TEST_BEGIN str_nop_mem
     la      s2, word_buf
     LIX     t4, 0xdeadbeef
     sw      t4, 0(s2)
@@ -336,6 +345,7 @@ test_c_nop:
     call    check
 
     /* --- back-to-back sequence of NOPs, still no side effects --- */
+    TEST_BEGIN str_nop_sequence
     LIXT    t0, 0x7777777777777777
     .option rvc
     c.nop
@@ -371,6 +381,7 @@ test_c_nop:
  *   reg = base; insn reg, imm; check reg == expect. reg may be
  *   ra/a0/a1/a2 -- result is copied to t2 before a0-a2 are reused. */
 .macro T_CI_RI insn, reg, base, imm, expect, name
+    TEST_BEGIN \name
     LIX     \reg, \base
     .option rvc
     \insn   \reg, \imm
@@ -419,6 +430,7 @@ test_c_addi:
     T_CI_RI c.addi, t0, 0xffffffffffffffff, 1,  0x0000000000000000, str_addi_wrap_inc
     T_CI_RI c.addi, t0, INTX_MIN, -1, INTX_MAX, str_addi_wrap_dec
 
+    TEST_BEGIN str_addi_sp_delta
     /* --- rd = sp is legal for plain C.ADDI (distinct from
      *     C.ADDI16SP's dedicated encoding); isolate and verify both
      *     the applied delta and that sp is fully restored after --- */
@@ -434,6 +446,7 @@ test_c_addi:
     LIX     a1, -16
     sub     a2, t4, t3
     call    check
+    TEST_BEGIN str_addi_sp_restored
     la      a0, str_addi_sp_restored
     mv      a1, t3
     mv      a2, sp
@@ -450,6 +463,7 @@ test_c_addi:
  *   part of the arithmetic), and the 32-bit result is sign-extended
  *   to fill the 64-bit destination. */
 .macro T_ADDIW_VAL init64, imm, expect64, name
+    TEST_BEGIN \name
     LIX     t1, \init64
     .option rvc
     c.addiw t1, \imm
@@ -515,6 +529,7 @@ test_c_addiw:
  *   exact expected sign-extended value. rd may be a0/a1/a2 -- result
  *   copied out before those get reused. */
 .macro T_LI_VAL rd, poison, imm, expect, name
+    TEST_BEGIN \name
     LIXT    \rd, \poison
     .option rvc
     c.li    \rd, \imm
@@ -574,6 +589,7 @@ test_c_li:
  *   routine). Cumulative drift across all deltas is caught separately
  *   by a single final restoration check. */
 .macro T_A16SP_DELTA delta, name
+    TEST_BEGIN \name
     mv      t2, sp
     .option rvc
     c.addi16sp sp, \delta
@@ -616,6 +632,7 @@ test_c_addi16sp:
     T_A16SP_DELTA -128, str_a16sp_m128
     T_A16SP_DELTA -256, str_a16sp_m256
 
+    TEST_BEGIN str_a16sp_mmin
     /* -512 is the one boundary the generic macro can't self-undo: the
      * range is asymmetric (-512..496), so -(-512)=512 doesn't fit in
      * a single instruction. Undo it in two steps (+496, then +16)
@@ -637,6 +654,7 @@ test_c_addi16sp:
     T_A16SP_DELTA 208,  str_a16sp_mix1    /* nzimm/16 = 0b001101 */
     T_A16SP_DELTA -304, str_a16sp_mix2    /* nzimm/16 = 0b101101 (two's complement) */
 
+    TEST_BEGIN str_a16sp_restored
     /* --- catches any cumulative drift the per-delta checks above,
      *     each individually self-cancelling, could not --- */
     la      a0, str_a16sp_restored
@@ -652,6 +670,7 @@ test_c_addi16sp:
  *   Poison rd first (same rationale as T_LI_VAL -- C.LUI must fully
  *   replace rd, not combine with it). rd may be a0/a1/a2. */
 .macro T_LUI_VAL rd, poison, imm, expect, name
+    TEST_BEGIN \name
     LIX     \rd, \poison
     .option rvc
     c.lui   \rd, (\imm & 0xfffff)   /* GNU as wants c.lui's operand in the
@@ -715,6 +734,7 @@ test_c_lui:
  * fixed walking-bit-pattern input so a shift-amount-off-by-one or a
  * bit-lane swap would show up immediately. */
 .macro T_SRLI_REG reg, name
+    TEST_BEGIN \name
     .if XLEN == 64
     LIX     \reg, 0xfedcba9876543210
     .else
@@ -742,6 +762,7 @@ test_c_lui:
  * since the input's top bit is set, this also confirms the shift is
  * logical (zero-fill) and not arithmetic (which C.SRAI covers). */
 .macro T_SRLI_SHAMT shamt, expect, name
+    TEST_BEGIN \name
     LIX     s0, 0xffffffffffffffff
     .option rvc
     c.srli  s0, \shamt
@@ -805,6 +826,7 @@ test_c_srli:
  * rd'/rs1' field, same as C.SRLI). Fixed shamt=4, input has its top
  * bit set so the arithmetic (sign-preserving) fill is exercised. */
 .macro T_SRAI_REG reg, name
+    TEST_BEGIN \name
     .if XLEN == 64
     LIX     \reg, 0xfedcba9876543210
     .else
@@ -831,6 +853,7 @@ test_c_srli:
  * register s0, input = sign bit alone, so each expected value directly
  * shows how many 1-bits get shifted in from the top. */
 .macro T_SRAI_SHAMT shamt, expect, name
+    TEST_BEGIN \name
     LIX     s0, INTX_MIN
     .option rvc
     c.srai  s0, \shamt
@@ -885,6 +908,7 @@ test_c_srai:
     T_SRAI_SHAMT 10, 0xffe00000, str_srai_sh10   /* 0b01010 */
     .endif
 
+    TEST_BEGIN str_srai_positive
     /* --- positive input (sign bit clear): arithmetic shift needs no
      *     sign-extension at all, behaves exactly like C.SRLI here --- */
     LIX     s0, INTX_MAX
@@ -903,6 +927,7 @@ test_c_srai:
 /* T_ANDI_REG rd, name -- sweep every legal rd'/rs1' (fixed imm=0x0f,
  * fixed input=0x7f). */
 .macro T_ANDI_REG reg, name
+    TEST_BEGIN \name
     LIX     \reg, 0x7f
     .option rvc
     c.andi  \reg, 0x0f
@@ -922,6 +947,7 @@ test_c_srai:
  * to identity) and positive cases ("mostly zeros" masks) exercise
  * genuinely different behavior, not just a sign-flipped magnitude. */
 .macro T_ANDI_IMM imm, expect, name
+    TEST_BEGIN \name
     LIXT    s0, 0xfedcba9876543210
     .option rvc
     c.andi  s0, \imm
@@ -992,6 +1018,7 @@ test_c_andi:
  * rd'/rs1' field; "other" (rs2') is fixed at a4, so this must not be
  * called with reg=a4 (see the matching T_CA_ALIAS a4 test instead). */
 .macro T_CA_RS1 insn, reg, base, other, expect, name
+    TEST_BEGIN \name
     LIX     \reg, \base
     LIX     a4, \other
     .option rvc
@@ -1008,6 +1035,7 @@ test_c_andi:
  * is fixed at s0, so this must not be called with reg=s0 (see the
  * matching T_CA_ALIAS s0 test instead). */
 .macro T_CA_RS2 insn, reg, base, other, expect, name
+    TEST_BEGIN \name
     LIXT    s0, \base
     LIXT    \reg, \other
     .option rvc
@@ -1022,6 +1050,7 @@ test_c_andi:
 /* T_CA_ALIAS insn, reg, val, expect, name -- rd'==rs1'==rs2' aliasing:
  * the one shared register is simultaneously both operands. */
 .macro T_CA_ALIAS insn, reg, val, expect, name
+    TEST_BEGIN \name
     LIXT    \reg, \val
     .option rvc
     \insn   \reg, \reg
@@ -1073,6 +1102,7 @@ test_c_sub:
     T_CA_RS2 c.sub, a4, 0x5555555555555555, 0xaaaaaaaaaaaaaaaa, 0xaaaaaaaaaaaaaaab, str_sub_val_alt2
 
     /* --- invariant: C.SUB must not modify rs2' --- */
+    TEST_BEGIN str_sub_rs2_preserved
     LIX     s0, 100
     LIX     a4, 30
     mv      t1, a4
@@ -1126,6 +1156,7 @@ test_c_and:
     T_CA_RS2 c.and, a4, 0xfedcba9876543210, 0x123456789abcdef0, 0x1214121812141210, str_and_val_walking
 
     /* --- invariant: C.AND must not modify rs2' --- */
+    TEST_BEGIN str_and_rs2_preserved
     LIX     s0, 0xff
     LIX     a4, 0x1c
     mv      t1, a4
@@ -1178,6 +1209,7 @@ test_c_xor:
     T_CA_RS2 c.xor, a4, 0xfedcba9876543210, 0x123456789abcdef0, 0xece8ece0ece8ece0, str_xor_val_walking
 
     /* --- invariant: C.XOR must not modify rs2' --- */
+    TEST_BEGIN str_xor_rs2_preserved
     LIX     s0, 0xff
     LIX     a4, 0x0f
     mv      t1, a4
@@ -1229,6 +1261,7 @@ test_c_or:
     T_CA_RS2 c.or, a4, 0xfedcba9876543210, 0x123456789abcdef0, 0xfefcfef8fefcfef0, str_or_val_walking
 
     /* --- invariant: C.OR must not modify rs2' --- */
+    TEST_BEGIN str_or_rs2_preserved
     LIX     s0, 0xf0
     LIX     a4, 0x0f
     mv      t1, a4
@@ -1286,6 +1319,7 @@ test_c_subw:
     T_CA_RS2 c.subw, a4, 5, 0xcafebabe00000003, 2, str_subw_rs2_garbage_upper
 
     /* --- invariant: C.SUBW must not modify rs2' --- */
+    TEST_BEGIN str_subw_rs2_preserved
     LIX     s0, 100
     LIX     a4, 30
     mv      t1, a4
@@ -1340,6 +1374,7 @@ test_c_addw:
     T_CA_RS2 c.addw, a4, 5, 0xcafebabe00000003, 8, str_addw_rs2_garbage_upper
 
     /* --- invariant: C.ADDW must not modify rs2' --- */
+    TEST_BEGIN str_addw_rs2_preserved
     LIX     s0, 100
     LIX     a4, 30
     mv      t1, a4
@@ -1364,6 +1399,7 @@ test_c_addw:
  * slightly short is very likely to hit it rather than coincidentally
  * land on a harmless c.nop. */
 .macro T_J_FWD dist, name
+    TEST_BEGIN \name
     LIX     s2, 0
     .option rvc
     c.j     1f
@@ -1386,6 +1422,7 @@ test_c_addw:
  * success marker. dist = 6 + 2N (2 for the c.li marker, 4 for the
  * bookkeeping jal, 2N for N c.nop fillers). */
 .macro T_J_BWD dist, name
+    TEST_BEGIN \name
     LIX     s2, 0
     j       5f
 4:
@@ -1422,6 +1459,7 @@ test_c_addw:
  *        silently-widened jal, before being relied on.
  * ======================================================================= */
 test_c_j:
+    TEST_BEGIN str_j_min
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -1463,6 +1501,7 @@ test_c_j:
     T_J_BWD 1024, str_j_bwd1024
     T_J_BWD 2044, str_j_bwdmax    /* near-max backward (true min is -2048) */
 
+    TEST_BEGIN str_j_loop
     /* --- repeated use as a loop's "continue" edge: a real backward
      *     jump exercised on every iteration but one, not just a
      *     single one-shot distance --- */
@@ -1501,6 +1540,7 @@ test_c_j:
 
 /* T_CJAL_FWD dist, name, lname -- forward, as T_J_FWD, plus the link. */
 .macro T_CJAL_FWD dist, name, lname
+    TEST_BEGIN \name
     LIX     s2, 0
     .option rvc
 7:  c.jal   1f
@@ -1515,6 +1555,7 @@ test_c_j:
     LIX     a1, 0
     mv      a2, s2
     call    check
+    TEST_BEGIN \lname
     la      a1, 7b
     addi    a1, a1, 2
     la      a0, \lname
@@ -1524,6 +1565,7 @@ test_c_j:
 
 /* T_CJAL_BWD dist, name, lname -- backward, as T_J_BWD, plus the link. */
 .macro T_CJAL_BWD dist, name, lname
+    TEST_BEGIN \name
     LIX     s2, 0
     j       5f
 4:
@@ -1545,6 +1587,7 @@ test_c_j:
     LIX     a1, 1
     mv      a2, s2
     call    check
+    TEST_BEGIN \lname
     la      a1, 7b
     addi    a1, a1, 2
     la      a0, \lname
@@ -1553,6 +1596,7 @@ test_c_j:
 .endm
 
 test_c_jal:
+    TEST_BEGIN str_cjal_min_link
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -1625,6 +1669,7 @@ test_c_jal:
  * ======================================================================= */
 
 .macro T_BEQZ_TAKEN reg, name
+    TEST_BEGIN \name
     LIX     \reg, 0
     LIX     s5, 0
     .option rvc
@@ -1639,6 +1684,7 @@ test_c_jal:
 .endm
 
 .macro T_BEQZ_NOTTAKEN reg, name
+    TEST_BEGIN \name
     LIX     \reg, 0xdeadbeef
     LIX     s5, 0
     .option rvc
@@ -1676,6 +1722,7 @@ test_c_beqz:
     T_BEQZ_NOTTAKEN a4, str_beqz_nottaken_a4
     T_BEQZ_NOTTAKEN a5, str_beqz_nottaken_a5
 
+    TEST_BEGIN str_beqz_loop
     /* --- backward branch, evaluated repeatedly: loop "while not done",
      *     where "done" is set on the 3rd iteration --- */
     LIX     s0, 0                   /* not-done flag */
@@ -1694,6 +1741,7 @@ test_c_beqz:
     mv      a2, s5
     call    check
 
+    TEST_BEGIN str_beqz_maxfwd
     /* --- max forward offset: branch skips filler C.NOPs plus a
      *     trailing poison instruction. Note: 124 fillers is what the
      *     arithmetic for the true +254 boundary calls for, but at
@@ -1721,6 +1769,7 @@ test_c_beqz:
     mv      a2, s5
     call    check
 
+    TEST_BEGIN str_beqz_maxbwd
     /* --- max backward offset (-256): jump past the target block on
      *     the way down, run 124 filler C.NOPs, then branch back --- */
     LIX     s0, 0
@@ -1748,6 +1797,7 @@ test_c_beqz:
     ret
 
 .macro T_BNEZ_TAKEN reg, name
+    TEST_BEGIN \name
     LIX     \reg, 0xdeadbeef
     LIX     s5, 0
     .option rvc
@@ -1762,6 +1812,7 @@ test_c_beqz:
 .endm
 
 .macro T_BNEZ_NOTTAKEN reg, name
+    TEST_BEGIN \name
     LIX     \reg, 0
     LIX     s5, 0
     .option rvc
@@ -1799,6 +1850,7 @@ test_c_bnez:
     T_BNEZ_NOTTAKEN a4, str_bnez_nottaken_a4
     T_BNEZ_NOTTAKEN a5, str_bnez_nottaken_a5
 
+    TEST_BEGIN str_bnez_loop
     /* --- backward branch, evaluated repeatedly: natural countdown
      *     loop, "while nonzero, decrement" --- */
     LIX     s0, 5                   /* loop count */
@@ -1814,6 +1866,7 @@ test_c_bnez:
     mv      a2, s5
     call    check
 
+    TEST_BEGIN str_bnez_maxfwd
     /* --- max forward offset: see the identical BEQZ case above for
      *     why 123 fillers (+252), not the theoretical 124 (+254). --- */
     LIX     s0, 0xdeadbeef
@@ -1832,6 +1885,7 @@ test_c_bnez:
     call    check
 
     /* --- max backward offset (-256) --- */
+    TEST_BEGIN str_bnez_maxbwd
     LIX     s0, 0xdeadbeef
     LIX     s5, 0
     j       5f
@@ -1856,7 +1910,7 @@ test_c_bnez:
     addi    sp, sp, 16
     ret
 
-tests_quadrant1:
+tests_c_quadrant1:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -1894,13 +1948,13 @@ tests_quadrant1:
     /* --- C.BNEZ: see test_c_bnez --- */
     jal     ra, test_c_bnez
 
-    jal     ra, bitx_quadrant1
+    jal     ra, bitx_c_quadrant1
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
     ret
 
-bitx_quadrant1:
+bitx_c_quadrant1:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 

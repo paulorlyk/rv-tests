@@ -1,14 +1,14 @@
 /* =====================================================================
- * base/op_imm.S  --  RV64I base-ISA OP-IMM (I-type) ALU instructions:
+ * i/op_imm.S  --  RV64I base-ISA OP-IMM (I-type) ALU instructions:
  *                     ADDI, SLTI, SLTIU, XORI, ORI, ANDI,
  *                     SLLI, SRLI, SRAI
  *
- * Part of the RV64I base-ISA suite; see base/tests.S for how this
- * plugs into the rest (main_tests.S -> base/tests.S -> here), and
+ * Part of the RV64I base-ISA suite; see i/tests.S for how this
+ * plugs into the rest (main_tests.S -> i/tests.S -> here), and
  * common.S for the boot/UART/reporting harness everything sits on
  * ("check", "uart_puts" are used from there; nothing else).
  *
- * The immediate-operand twins of base/op_alu.S, and organised the same
+ * The immediate-operand twins of i/op_alu.S, and organised the same
  * way: rd/rs1 carry identical decode risk for all nine, so the
  * register fields (and rd==rs1 aliasing) are swept *once*, through
  * ADDI. The per-instruction depth goes into the operation and, above
@@ -39,9 +39,9 @@
  *     amounts (>= 64) aren't encodable -- the assembler rejects them --
  *     so there's no masking test like SLL's rs2=64.
  *   - SLTI/SLTIU get the same signed/unsigned divergence pairs as
- *     SLT/SLTU in base/op_alu.S.
+ *     SLT/SLTU in i/op_alu.S.
  *
- * Bit independence across fields (bitx_op_imm, at the end): every bit
+ * Bit independence across fields (bitx_i_op_imm, at the end): every bit
  * pair among rd, rs1 and the immediate set together, per instruction --
  * C(22,2) = 231 cases each for the six 12-bit-immediate ops and
  * C(16,2) = 120 each for SLLI/SRLI/SRAI (6-bit shamt). Expected values
@@ -54,6 +54,7 @@
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
     .option norvc            /* mandatory, not stylistic: ADDI, ANDI,
                                * SLLI, SRLI and SRAI all have compressed
@@ -65,7 +66,7 @@
 
     .include "bitx.inc"
 
-    .global tests_base_op_imm
+    .global tests_i_op_imm
 
     .section .text
 
@@ -113,6 +114,7 @@
  * the swept list. reg may be a0/a1/a2 -- result captured to t2 before
  * those are reused. */
 .macro T_OPI_RD insn, rdreg, v1, imm, expect, name
+    TEST_BEGIN \name
     LIX     t3, \v1
     \insn   \rdreg, t3, \imm
     mv      t2, \rdreg
@@ -123,6 +125,7 @@
 .endm
 
 .macro T_OPI_RS1 insn, rs1reg, v1, imm, expect, name
+    TEST_BEGIN \name
     LIX     \rs1reg, \v1
     \insn   t2, \rs1reg, \imm
     la      a0, \name
@@ -134,6 +137,7 @@
 /* T_OPI_VAL insn, v1, imm, expect, name -- fixed rd=t2/rs1=t3, sweep
  * the source value and immediate. */
 .macro T_OPI_VAL insn, v1, imm, expect, name
+    TEST_BEGIN \name
     LIX     t3, \v1
     \insn   t2, t3, \imm
     la      a0, \name
@@ -145,6 +149,7 @@
 /* T_OPI_PRESERVED insn, imm, name -- the instruction must not write
  * back to its source register. */
 .macro T_OPI_PRESERVED insn, imm, name
+    TEST_BEGIN \name
     LIXT    t3, 0x123456789abcdef0
     mv      t5, t3
     \insn   t2, t3, \imm
@@ -154,7 +159,7 @@
     call    check
 .endm
 
-tests_base_op_imm:
+tests_i_op_imm:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -175,11 +180,13 @@ tests_base_op_imm:
     T_OPI_RS1 addi, t6,  100, 23, 123, str_opi_rs1_t6
 
     /* rs1=x0: the "li rd, imm" idiom, both signs of imm */
+    TEST_BEGIN str_opi_rs1_x0_neg
     addi    t2, x0, -2048
     la      a0, str_opi_rs1_x0_neg
     LIX     a1, 0xfffffffffffff800
     mv      a2, t2
     call    check
+    TEST_BEGIN str_opi_rs1_x0_pos
     addi    t2, x0, 2047
     la      a0, str_opi_rs1_x0_pos
     LIX     a1, 0x00000000000007ff
@@ -187,6 +194,7 @@ tests_base_op_imm:
     call    check
 
     /* rd=x0: must not fault, result discarded */
+    TEST_BEGIN str_opi_rd_x0
     LIX     t3, 100
     addi    x0, t3, 23
     la      a0, str_opi_rd_x0
@@ -195,6 +203,7 @@ tests_base_op_imm:
     call    check
 
     /* ===== aliasing (through ADDI): rd==rs1 ===== */
+    TEST_BEGIN str_opi_alias_rd_rs1
     LIX     t1, 100
     addi    t1, t1, 23
     la      a0, str_opi_alias_rd_rs1
@@ -369,13 +378,13 @@ tests_base_op_imm:
     T_OPI_PRESERVED srli, 4, str_srli_rs1_preserved
     T_OPI_PRESERVED srai, 4, str_srai_rs1_preserved
 
-    jal     ra, bitx_op_imm
+    jal     ra, bitx_i_op_imm
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
     ret
 
-bitx_op_imm:
+bitx_i_op_imm:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 

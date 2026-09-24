@@ -6,16 +6,21 @@
  * instruction-set test suite can sit on top of:
  *
  *   - reset vector / M-mode entry at 0x80000000, gp/sp/mtvec setup
- *   - a minimal M-mode trap handler (expects only C.EBREAK/EBREAK,
- *     reports and hangs on anything else)
+ *   - a minimal M-mode trap handler on a private stack (expects only
+ *     C.EBREAK, reports and hangs on anything else -- unless a test has
+ *     armed it with trap_resume, see below)
+ *   - a FENCE.I probe at reset (has_fencei, for SYNC_I in harness.inc)
  *   - an ns16550a UART driver (init for 115200 8N1, putc/puts, hex/dec
  *     printing)
  *   - "check": a generic named pass/fail comparator that prints its
- *     verdict over the UART and tracks a running failure count
- *   - the top-level summary/halt sequence
+ *     verdict over the UART and tracks a running failure count, and
+ *     "check_trap", the FAIL for a check whose instruction trapped
+ *   - the top-level summary/halt sequence; if anything failed, the
+ *     summary lists the first FAIL_LOG_MAX failed checks with their
+ *     expected and actual values
  *
  * It calls out to a single external entry point, run_tests, which the
- * actual test-suite file (e.g. rvc/tests.S) must define as .global.
+ * actual test-suite file (e.g. c/tests.S) must define as .global.
  * run_tests should print its own banner, run whatever it wants (using
  * "check" to report each case), and ret when done -- fail_count will
  * already reflect every check() call by then. This is the seam meant
@@ -81,6 +86,13 @@
     .equ UART_FCR_INIT, 0xc7       /* enable FIFO, clear RX/TX, 14-byte trig */
     .equ UART_MCR_INIT, 0x0b       /* DTR | RTS | OUT2 */
 
+/* The summary lists the first FAIL_LOG_MAX failed checks; check() and
+ * check_trap() record them in fail_log. An entry is (name, expected,
+ * actual, 0) from check(), or (name, mcause, mepc, 1) from
+ * check_trap(). */
+    .equ FAIL_LOG_MAX,  8
+    .equ FAIL_LOG_ENT,  4 * REG_BYTES  /* name ptr, two values, trapped */
+
 /* Symbols other test-suite files are expected to call/reference.
  * run_tests is the one symbol *this* file expects someone else to
  * provide (see file header). */
@@ -91,12 +103,21 @@
     .global uart_put_hex64
     .global uart_put_dec
     .global check
+    .global check_trap
+    .global test_begin
+    .global has_fencei
     .global fail_count
     .global pass_count
     .global ebreak_flag
     .global ebreak_mepc
     .global ebreak_mcause
     .global ebreak_hit_count
+    .global trap_resume
+    .global trap_count
+    .global trap_mcause
+    .global trap_mepc
+    .global trap_mtval
+    .global trap_mstatus
 
 /* ----------------------------------------------------------------------
  * Header / vector area. We keep this minimal: a single instruction at
@@ -111,17 +132,54 @@ _start:
 
     .align 4
 trap_handler:
-    /* Minimal M-mode trap handler. We only *expect* to ever land here
-     * from a deliberate EBREAK/C.EBREAK test (mcause == 3, breakpoint).
-     * Anything else is a genuine failure (e.g. illegal instruction
-     * because the target doesn't really implement an extension being
-     * tested) and we report it and hang, since continuing would be
-     * meaningless. */
+    /* Minimal M-mode trap handler. Unarmed, we only *expect* to ever
+     * land here from a deliberate C.EBREAK test (mcause == 3,
+     * breakpoint). Anything else is a genuine failure (e.g. illegal
+     * instruction because the target doesn't really implement an
+     * extension being tested) and we report it and hang, since
+     * continuing would be meaningless.
+     *
+     * ARMED (trap_resume != 0): the one mode for tests that trap on
+     * purpose in any other way -- ECALL, the 4-byte EBREAK, an
+     * instruction that must be illegal in U-mode, an interrupt taken
+     * out of WFI. The test stores a resume address in trap_resume
+     * (TRAP_ARM in harness.inc) before the trapping instruction. The
+     * next trap, whatever its cause and from whatever privilege mode,
+     * then records mcause, mepc, mtval and mstatus as they were on
+     * entry (trap_mcause/_mepc/_mtval/_mstatus), bumps trap_count,
+     * disarms (one-shot), and returns with MRET to the resume address
+     * in M-mode (MPP is set to M first; MIE comes back from MPIE, as
+     * any MRET does). For an interrupt it also clears mie, so the
+     * source can't fire again the moment MRET re-enables interrupts;
+     * the test re-programs whatever raised it. So the test itself
+     * judges the cause, and a trap it didn't expect comes out as a
+     * FAIL with the recorded mcause rather than as a hang.
+     *
+     * PRIVATE STACK. The handler never touches the interrupted code's
+     * sp: a bitx case may be sweeping sp as an operand (holding a pool
+     * value, or the address of the very buffer under test) when its
+     * instruction traps. So t0 is parked in mscratch, sp is saved at
+     * the top of trap_stack and replaced by it, and trap_return puts
+     * it back. mscratch holds nothing the handler relies on, so any
+     * value a test left there is fine -- but a trap overwrites it
+     * (the Zicsr tests write and read it back with no trap between).
+     * The whole handler is norelax: gp may be swept too. */
+    .option push
+    .option norelax
+    csrw    mscratch, t0
+    la      t0, trap_stack_top
+    REG_S   sp, -16(t0)             /* the interrupted sp */
+    addi    sp, t0, -16
+    csrr    t0, mscratch
     addi    sp, sp, -32
     REG_S   t0, 0(sp)
     REG_S   t1, 8(sp)
     REG_S   a0, 16(sp)
     REG_S   ra, 24(sp)
+
+    la      t1, trap_resume
+    REG_L   t0, 0(t1)
+    bnez    t0, trap_armed
 
     csrr    t0, mcause
     li      t1, 3                   /* 3 = breakpoint exception */
@@ -133,10 +191,9 @@ trap_handler:
      * counter (so a test can confirm the trap really fires every time
      * across repeated EBREAKs, not just once), set the "we got here"
      * flag, then skip past the instruction (mepc += 2 assumes a
-     * compressed C.EBREAK; a suite testing the uncompressed EBREAK
-     * would need mepc += 4 instead -- there is only one
-     * ebreak_flag/handler here since only one test at a time is
-     * expected to rely on it) and resume. */
+     * compressed C.EBREAK; the uncompressed EBREAK is tested through
+     * the armed mode below, which resumes at an explicit address
+     * instead) and resume. */
     la      t1, ebreak_mcause
     sw      t0, 0(t1)
 
@@ -156,20 +213,65 @@ trap_handler:
     addi    t0, t0, 2
     csrw    mepc, t0
 
+trap_return:
     REG_L   t0, 0(sp)
     REG_L   t1, 8(sp)
     REG_L   a0, 16(sp)
     REG_L   ra, 24(sp)
     addi    sp, sp, 32
+    REG_L   sp, 0(sp)               /* back to the interrupted sp */
+    mret
+
+/* Armed (see above): t0 = resume address, t1 = &trap_resume. */
+trap_armed:
+    REG_S   zero, 0(t1)             /* one-shot: disarm */
+    la      t1, trap_mcause
+    csrr    a0, mcause
+    REG_S   a0, 0(t1)
+    la      t1, trap_mepc
+    csrr    a0, mepc
+    REG_S   a0, 0(t1)
+    la      t1, trap_mtval
+    csrr    a0, mtval
+    REG_S   a0, 0(t1)
+    la      t1, trap_mstatus
+    csrr    a0, mstatus
+    REG_S   a0, 0(t1)
+    la      t1, trap_count
+    lw      a0, 0(t1)
+    addi    a0, a0, 1
+    sw      a0, 0(t1)
+
+    csrw    mepc, t0                /* resume there ... */
+    li      t0, 0x1800              /* ... in M-mode: MPP = 3 */
+    csrs    mstatus, t0
+    csrr    t0, mcause
+    bgez    t0, trap_return         /* an exception: done */
+    csrw    mie, zero               /* an interrupt: silence its source */
+    j       trap_return
+    .option pop
+
+/* pmp_skip: mtvec during reset's PMP setup only. A PMP CSR write that
+ * traps (no PMP on this hart) is skipped: mepc += 4 (common.S is
+ * norvc, so every instruction here is 4 bytes) and back. Clobbers t1;
+ * the trap came from M-mode, so MRET returns to M-mode. */
+    .align 2
+pmp_skip:
+    csrr    t1, mepc
+    addi    t1, t1, 4
+    csrw    mepc, t1
     mret
 
 trap_unexpected:
+    .option push
+    .option norelax
     la      a0, str_unexpected_trap
     jal     ra, uart_puts
     csrr    a0, mcause
     jal     ra, uart_put_hex64
     la      a0, str_newline
     jal     ra, uart_puts
+    .option pop
 trap_hang:
     j       trap_hang
 
@@ -188,8 +290,37 @@ reset:
     la      gp, __global_pointer$
     .option pop
 
+    /* No interrupts until a test asks for one. mstatus.MIE resets to 0,
+     * but mie's reset value is left to the implementation, so clear
+     * both: priv/wfi.S is the only file that enables a source, and it
+     * leaves mie = 0 again when it is done. */
+    csrci   mstatus, 0x8            /* mstatus.MIE = 0 */
+    csrw    mie, zero
+
     la      sp, stack_top
     la      t0, trap_handler        /* direct mode, low 2 bits = 0 */
+    csrw    mtvec, t0
+
+    /* Let U-mode reach all of memory: PMP entry 0 = NAPOT over the
+     * whole address space, R/W/X, not locked (so M-mode is unaffected).
+     * Without it, once any PMP entry is implemented, every U-mode
+     * access fails -- and the suites that drop to U-mode (ECALL/EBREAK
+     * from U, MRET, WFI) run their U-mode code in place.
+     *
+     * A hart with no PMP entries needs none of this (U-mode then has
+     * full access), but may not tolerate it either: the 1.12 spec makes
+     * the PMP CSRs read-only zero there, while older cores -- and QEMU
+     * with pmp=false -- raise an illegal-instruction trap on them. So
+     * the two writes run with mtvec pointing at pmp_skip, which steps
+     * over a CSR write that traps; then mtvec goes back to
+     * trap_handler. */
+    la      t0, pmp_skip
+    csrw    mtvec, t0
+    li      t0, -1
+    csrw    pmpaddr0, t0
+    li      t0, 0x1f                /* A = NAPOT, X, W, R */
+    csrw    pmpcfg0, t0
+    la      t0, trap_handler
     csrw    mtvec, t0
 
     li      t0, 0
@@ -205,8 +336,42 @@ reset:
     sw      t0, 0(t1)
     la      t1, ebreak_mepc
     REG_S   t0, 0(t1)
+    la      t1, pending_name
+    REG_S   t0, 0(t1)
+    la      t1, trap_resume
+    REG_S   t0, 0(t1)
+    la      t1, trap_count
+    sw      t0, 0(t1)
+    la      t1, has_fencei
+    sw      t0, 0(t1)
+
+    /* Probe FENCE.I once, through the armed handler: has_fencei = 1 if
+     * it executes, stays 0 if it traps (no Zifencei). The shared bitx
+     * machinery synchronises instruction fetch with SYNC_I
+     * (harness.inc), which skips the FENCE.I when has_fencei is 0, so a
+     * hart without Zifencei still runs every suite; only the Zifencei
+     * suite's own FENCE.Is (armed, reported by check_trap) fail. */
+    la      t0, .Lfencei_probed
+    la      t1, trap_resume
+    REG_S   t0, 0(t1)
+    fence.i
+    la      t1, trap_resume
+    REG_S   zero, 0(t1)
+    li      t0, 1
+    la      t1, has_fencei
+    sw      t0, 0(t1)
+.Lfencei_probed:
+    la      t1, trap_count          /* the probe's trap, if any, is not */
+    sw      zero, 0(t1)             /* a test's */
 
     jal     ra, uart_init
+
+    la      t1, has_fencei
+    lw      t0, 0(t1)
+    bnez    t0, 1f
+    la      a0, str_no_fencei
+    jal     ra, uart_puts
+1:
 
     call    run_tests           /* provided by the test-suite file */
 
@@ -233,6 +398,7 @@ reset:
     j       halt
 
 halt_fail:
+    jal     ra, fail_log_print
     la      a0, str_some_fail
     jal     ra, uart_puts
     /* All done: park the hart. WFI lets it idle (or a simulator stop
@@ -367,27 +533,92 @@ uart_put_dec:
     ret
 
 /* ----------------------------------------------------------------------
+ * test_begin: announce a test before it runs.
+ *   a0 = pointer to test-name string (NUL terminated, no newline)
+ * Prints "<name> - " and remembers a0 as the pending name, so the
+ * matching check() only has to add "OK"/"FAIL". If the test then traps
+ * or hangs, its name is already the last thing on the UART. Preserves
+ * every register except ra. Test code reaches it through the TEST_BEGIN
+ * macro (harness.inc), which saves ra and a0 around the call, so it can
+ * go anywhere sp is valid.
+ * -------------------------------------------------------------------- */
+test_begin:
+    addi    sp, sp, -32
+    REG_S   ra, 0(sp)
+    REG_S   s0, 8(sp)
+    REG_S   t0, 16(sp)
+    REG_S   t1, 24(sp)
+    mv      s0, a0
+    jal     ra, pending_flush       /* an earlier test_begin never reached
+                                     * its check(): end that line first */
+    mv      a0, s0
+    jal     ra, uart_puts
+    la      a0, str_dots
+    jal     ra, uart_puts
+    la      t0, pending_name
+    REG_S   s0, 0(t0)
+    mv      a0, s0
+    REG_L   ra, 0(sp)
+    REG_L   s0, 8(sp)
+    REG_L   t0, 16(sp)
+    REG_L   t1, 24(sp)
+    addi    sp, sp, 32
+    ret
+
+/* pending_flush: if a test_begin is still pending (its name printed,
+ * no verdict yet), end that line with "\r\n" and clear it. Clobbers
+ * t0, t1, a0. */
+pending_flush:
+    la      t1, pending_name
+    REG_L   t0, 0(t1)
+    beqz    t0, 1f
+    REG_S   zero, 0(t1)
+    addi    sp, sp, -16
+    REG_S   ra, 0(sp)
+    la      a0, str_newline
+    jal     ra, uart_puts
+    REG_L   ra, 0(sp)
+    addi    sp, sp, 16
+1:  ret
+
+/* ----------------------------------------------------------------------
  * check: generic pass/fail reporter.
  *   a0 = pointer to test-name string (NUL terminated, no newline)
  *   a1 = expected value
  *   a2 = actual value
  * Prints "<name> - OK\r\n" or "<name> - FAIL\r\n" and bumps
- * pass_count or fail_count accordingly. Clobbers t0-t6, a0-a2.
+ * pass_count or fail_count accordingly. If test_begin already printed
+ * "<name> - " for this same name, only the verdict is added. The first
+ * FAIL_LOG_MAX failures are also recorded in fail_log (the name pointer,
+ * so it must point at a string that stays put -- every caller passes a
+ * .rodata label) for the summary to list. Clobbers t0-t6, a0-a2.
  * -------------------------------------------------------------------- */
 check:
     addi    sp, sp, -32
     REG_S   ra, 0(sp)
     REG_S   s0, 8(sp)
     REG_S   s1, 16(sp)
+    REG_S   s2, 24(sp)
     mv      s0, a1
     mv      s1, a2
-    jal     ra, uart_puts
-    la      a0, str_dots
-    jal     ra, uart_puts
+    mv      s2, a0
+    jal     ra, verdict_prefix
     bne     s0, s1, .Lcheck_fail
     j       .Lpass_count
 .Lcheck_fail:
-    la      a0, str_fail
+    la      t0, fail_count          /* fail_count, before the bump, is */
+    lw      t1, 0(t0)               /* this failure's fail_log index */
+    li      t2, FAIL_LOG_MAX
+    bgeu    t1, t2, 1f              /* log full: counted, not recorded */
+    li      t2, FAIL_LOG_ENT
+    mul     t1, t1, t2
+    la      t0, fail_log
+    add     t0, t0, t1
+    REG_S   s2, 0(t0)               /* name */
+    REG_S   s0, REG_BYTES(t0)       /* expected */
+    REG_S   s1, (2 * REG_BYTES)(t0) /* actual */
+    REG_S   zero, (3 * REG_BYTES)(t0) /* not a trap */
+1:  la      a0, str_fail
     jal     ra, uart_puts
     la      t0, fail_count
     lw      t1, 0(t0)
@@ -405,6 +636,151 @@ check:
     REG_L   ra, 0(sp)
     REG_L   s0, 8(sp)
     REG_L   s1, 16(sp)
+    REG_L   s2, 24(sp)
+    addi    sp, sp, 32
+    ret
+
+/* verdict_prefix: a0 = the name about to get its verdict. If
+ * test_begin announced this same name, "<name> - " is already out and
+ * the announcement is just cleared; otherwise any other pending line
+ * is ended and "<name> - " printed. Clobbers t0, t1, a0; preserves
+ * s0-s2 (check/check_trap keep their arguments there). */
+verdict_prefix:
+    addi    sp, sp, -16
+    REG_S   ra, 0(sp)
+    REG_S   a0, 8(sp)
+    la      t1, pending_name
+    REG_L   t0, 0(t1)
+    bne     t0, a0, 1f
+    REG_S   zero, 0(t1)
+    j       2f
+1:  jal     ra, pending_flush
+    REG_L   a0, 8(sp)
+    jal     ra, uart_puts
+    la      a0, str_dots
+    jal     ra, uart_puts
+2:  REG_L   ra, 0(sp)
+    addi    sp, sp, 16
+    ret
+
+/* ----------------------------------------------------------------------
+ * check_trap: report a check whose instruction trapped.
+ *   a0 = pointer to test-name string (as for check: a .rodata label)
+ *   a1 = mcause of the trap
+ *   a2 = mepc of the trap
+ * Always a failure: prints "<name> - FAIL (trap, mcause=..., mepc=...)"
+ * (only the verdict if test_begin announced the name), bumps
+ * fail_count and records (name, mcause, mepc, 1) in fail_log. A test
+ * whose instruction under test might be unimplemented runs it armed
+ * (TRAP_ARM) and, on the resume path, calls this once for every check
+ * it would otherwise have made (TRAP_FAILS / TRAP_REPORT in
+ * harness.inc), so the number of result lines doesn't depend on
+ * whether it trapped. Clobbers t0-t6, a0-a2.
+ * -------------------------------------------------------------------- */
+check_trap:
+    addi    sp, sp, -32
+    REG_S   ra, 0(sp)
+    REG_S   s0, 8(sp)
+    REG_S   s1, 16(sp)
+    REG_S   s2, 24(sp)
+    mv      s0, a1
+    mv      s1, a2
+    mv      s2, a0
+    jal     ra, verdict_prefix
+    la      t0, fail_count
+    lw      t1, 0(t0)
+    li      t2, FAIL_LOG_MAX
+    bgeu    t1, t2, 1f
+    li      t2, FAIL_LOG_ENT
+    mul     t1, t1, t2
+    la      t0, fail_log
+    add     t0, t0, t1
+    REG_S   s2, 0(t0)               /* name */
+    REG_S   s0, REG_BYTES(t0)       /* mcause */
+    REG_S   s1, (2 * REG_BYTES)(t0) /* mepc */
+    li      t1, 1
+    REG_S   t1, (3 * REG_BYTES)(t0) /* a trap */
+1:  la      a0, str_fail_trap
+    jal     ra, uart_puts
+    mv      a0, s0
+    jal     ra, uart_put_hex64
+    la      a0, str_trap_mepc
+    jal     ra, uart_puts
+    mv      a0, s1
+    jal     ra, uart_put_hex64
+    la      a0, str_trap_tail
+    jal     ra, uart_puts
+    la      t0, fail_count
+    lw      t1, 0(t0)
+    addi    t1, t1, 1
+    sw      t1, 0(t0)
+    REG_L   ra, 0(sp)
+    REG_L   s0, 8(sp)
+    REG_L   s1, 16(sp)
+    REG_L   s2, 24(sp)
+    addi    sp, sp, 32
+    ret
+
+/* ----------------------------------------------------------------------
+ * fail_log_print: the summary's list of failed checks, one line each,
+ *   "  <name> - expected 0x..., got 0x..."
+ * or, for a check_trap() entry,
+ *   "  <name> - trapped, mcause=0x..., mepc=0x..."
+ * for the first FAIL_LOG_MAX of them (in the order they ran), then
+ * "  ... and N more" if there were more. Only called with fail_count
+ * != 0. Clobbers t0-t6, a0.
+ * -------------------------------------------------------------------- */
+fail_log_print:
+    addi    sp, sp, -32
+    REG_S   ra, 0(sp)
+    REG_S   s0, 8(sp)
+    REG_S   s1, 16(sp)
+    REG_S   s2, 24(sp)
+    la      a0, str_fail_log_head
+    jal     ra, uart_puts
+    la      t0, fail_count
+    lw      s1, 0(t0)               /* s1 = failures in total */
+    mv      s2, s1                  /* s2 = entries left to print */
+    li      t0, FAIL_LOG_MAX
+    bleu    s2, t0, 1f
+    mv      s2, t0
+1:  la      s0, fail_log
+2:  beqz    s2, 3f
+    la      a0, str_fail_log_indent
+    jal     ra, uart_puts
+    REG_L   a0, 0(s0)
+    jal     ra, uart_puts
+    la      a0, str_fail_log_exp
+    REG_L   t0, (3 * REG_BYTES)(s0)
+    beqz    t0, 5f
+    la      a0, str_fail_log_trap
+5:  jal     ra, uart_puts
+    REG_L   a0, REG_BYTES(s0)
+    jal     ra, uart_put_hex64
+    la      a0, str_fail_log_got
+    REG_L   t0, (3 * REG_BYTES)(s0)
+    beqz    t0, 6f
+    la      a0, str_trap_mepc
+6:  jal     ra, uart_puts
+    REG_L   a0, (2 * REG_BYTES)(s0)
+    jal     ra, uart_put_hex64
+    la      a0, str_newline
+    jal     ra, uart_puts
+    addi    s0, s0, FAIL_LOG_ENT
+    addi    s2, s2, -1
+    j       2b
+3:  li      t0, FAIL_LOG_MAX
+    bleu    s1, t0, 4f
+    la      a0, str_fail_log_more
+    jal     ra, uart_puts
+    addi    a0, s1, -FAIL_LOG_MAX
+    jal     ra, uart_put_dec
+    la      a0, str_fail_log_more_tail
+    jal     ra, uart_puts
+4:  REG_L   ra, 0(sp)
+    REG_L   s0, 8(sp)
+    REG_L   s1, 16(sp)
+    REG_L   s2, 24(sp)
     addi    sp, sp, 32
     ret
 
@@ -421,7 +797,18 @@ str_summary_fail:     .asciz ", fail_count = "
 str_summary_tail:     .asciz " ---\r\n"
 str_all_pass:         .asciz "ALL TESTS PASSED\r\n"
 str_some_fail:        .asciz "ONE OR MORE TESTS FAILED\r\n"
+str_fail_log_head:    .asciz "Failed tests:\r\n"
+str_fail_log_indent:  .asciz "  "
+str_fail_log_exp:     .asciz " - expected "
+str_fail_log_got:     .asciz ", got "
+str_fail_log_more:    .asciz "  ... and "
+str_fail_log_more_tail: .asciz " more\r\n"
 str_unexpected_trap:  .asciz "\r\n!!! UNEXPECTED TRAP, mcause="
+str_fail_trap:        .asciz "FAIL (trap, mcause="
+str_trap_mepc:        .asciz ", mepc="
+str_trap_tail:        .asciz ")\r\n"
+str_fail_log_trap:    .asciz " - trapped, mcause="
+str_no_fencei:        .asciz "FENCE.I not implemented (it traps): instruction-fetch sync skipped\r\n"
 
 /* =======================================================================
  *  Uninitialised data (contiguous with .text/.rodata in the flat binary,
@@ -434,8 +821,22 @@ pass_count:   .word 0
 ebreak_flag:  .word 0
 ebreak_mcause: .word 0
 ebreak_hit_count: .word 0
+trap_count:   .word 0              /* traps taken while armed */
+has_fencei:   .word 0              /* reset's FENCE.I probe: 1 = implemented */
     .align 3
 ebreak_mepc:  REG_DATA 0
+pending_name: REG_DATA 0           /* name announced by test_begin, not
+                                    * yet reported by check(); 0 = none */
+trap_resume:  REG_DATA 0           /* armed-trap resume address; 0 = unarmed */
+trap_mcause:  REG_DATA 0           /* the last armed trap's CSRs on entry */
+trap_mepc:    REG_DATA 0
+trap_mtval:   REG_DATA 0
+trap_mstatus: REG_DATA 0
+fail_log:     .space FAIL_LOG_MAX * FAIL_LOG_ENT  /* see check() */
+
+    .align 4
+    .space 512                     /* trap_handler's private stack */
+trap_stack_top:
 
     .align 4
     .space 4096

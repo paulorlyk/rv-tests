@@ -1,8 +1,8 @@
 /* =====================================================================
- * base/stores.S  --  RV64I base-ISA store instructions: SB, SH, SW, SD
+ * i/stores.S  --  RV64I base-ISA store instructions: SB, SH, SW, SD
  *
- * Part of the RV64I base-ISA suite; see base/tests.S for how this
- * plugs into the rest (main_tests.S -> base/tests.S -> here), and
+ * Part of the RV64I base-ISA suite; see i/tests.S for how this
+ * plugs into the rest (main_tests.S -> i/tests.S -> here), and
  * common.S for the boot/UART/reporting harness everything sits on
  * ("check", "uart_puts" are used from there; nothing else).
  *
@@ -10,7 +10,7 @@
  * both only ever read, never written back, so unlike the load suite
  * there's no rd sweep -- instead rs1 and rs2 each get their own
  * independent sweep across a representative sample of registers (same
- * "representative sample, not full 32" approach as base/loads.S, for
+ * "representative sample, not full 32" approach as i/loads.S, for
  * the same reason: a 5-bit register field can still have a wrong-bit
  * decode bug even though it isn't restricted the way RVC's compressed
  * formats are).
@@ -31,10 +31,10 @@
  * hang rather than usefully fail.
  *
  * Offsets are not constrained to natural alignment for the width being
- * stored -- see base/loads.S's header and the README for the same
+ * stored -- see i/loads.S's header and the README for the same
  * caveat about misaligned-access portability to real hardware.
  *
- * Bit independence across fields (bitx_base_stores, called last): every
+ * Bit independence across fields (bitx_i_stores, called last): every
  * bit pair among rs2, rs1 and the split 12-bit offset set together,
  * C(22,2) = 231 cases per instruction, for all four. See bitx.inc and
  * BX_C_ST below.
@@ -45,12 +45,13 @@
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
-    .option norvc            /* mandatory, not stylistic -- see base/loads.S */
+    .option norvc            /* mandatory, not stylistic -- see i/loads.S */
 
     .include "bitx.inc"
 
-    .global tests_base_stores
+    .global tests_i_stores
 
     .section .text
 
@@ -81,6 +82,7 @@
  *  Shared macros, byte width (SB)
  * ======================================================================= */
 .macro T_SB_RS2 rs2reg, name
+    TEST_BEGIN \name
     la      s1, store_anchor        /* s1, not s0: s0 is itself one of the
                                       * swept rs2reg candidates, and using
                                       * s0 here would destroy the address
@@ -95,6 +97,7 @@
 .endm
 
 .macro T_SB_RS1 basereg, name
+    TEST_BEGIN \name
     la      \basereg, store_anchor
     LIX     a4, 0xaa
     sb      a4, 0(\basereg)
@@ -106,6 +109,7 @@
 .endm
 
 .macro T_SB_OFF off, name
+    TEST_BEGIN \name
     la      s0, store_anchor
     LIX     a4, 0xaa
     sb      a4, \off(s0)
@@ -117,6 +121,7 @@
 .endm
 
 .macro T_SB_VAL rawval, name
+    TEST_BEGIN \name
     la      s0, store_anchor
     LIX     a4, \rawval
     sb      a4, 0(s0)
@@ -131,6 +136,7 @@
  *  Shared macros, halfword width (SH)
  * ======================================================================= */
 .macro T_SH_RS2 rs2reg, name
+    TEST_BEGIN \name
     la      s1, store_anchor        /* s1, not s0 -- see T_SB_RS2 */
     LIX     \rs2reg, 0xaaaa
     sh      \rs2reg, 0(s1)
@@ -142,6 +148,7 @@
 .endm
 
 .macro T_SH_RS1 basereg, name
+    TEST_BEGIN \name
     la      \basereg, store_anchor
     LIX     a4, 0xaaaa
     sh      a4, 0(\basereg)
@@ -153,6 +160,7 @@
 .endm
 
 .macro T_SH_OFF off, name
+    TEST_BEGIN \name
     la      s0, store_anchor
     LIX     a4, 0xaaaa
     sh      a4, \off(s0)
@@ -164,6 +172,7 @@
 .endm
 
 .macro T_SH_VAL rawval, name
+    TEST_BEGIN \name
     la      s0, store_anchor
     LIX     a4, \rawval
     sh      a4, 0(s0)
@@ -178,6 +187,7 @@
  *  Shared macros, word width (SW)
  * ======================================================================= */
 .macro T_SW_RS2 rs2reg, name
+    TEST_BEGIN \name
     la      s1, store_anchor        /* s1, not s0 -- see T_SB_RS2 */
     LIX     \rs2reg, 0xaaaaaaaa
     sw      \rs2reg, 0(s1)
@@ -189,6 +199,7 @@
 .endm
 
 .macro T_SW_RS1 basereg, name
+    TEST_BEGIN \name
     la      \basereg, store_anchor
     LIX     a4, 0xaaaaaaaa
     sw      a4, 0(\basereg)
@@ -200,6 +211,7 @@
 .endm
 
 .macro T_SW_OFF off, name
+    TEST_BEGIN \name
     la      s0, store_anchor
     LIX     a4, 0xaaaaaaaa
     sw      a4, \off(s0)
@@ -211,6 +223,7 @@
 .endm
 
 .macro T_SW_VAL rawval, name
+    TEST_BEGIN \name
     la      s0, store_anchor
     LIX     a4, \rawval
     sw      a4, 0(s0)
@@ -225,6 +238,7 @@
  *  Shared macros, doubleword width (SD -- no upper-bits question)
  * ======================================================================= */
 .macro T_SD_RS2 rs2reg, name
+    TEST_BEGIN \name
     la      s1, store_anchor        /* s1, not s0 -- see T_SB_RS2 */
     LIXT    \rs2reg, 0xaaaaaaaaaaaaaaaa
     sd      \rs2reg, 0(s1)
@@ -236,6 +250,7 @@
 .endm
 
 .macro T_SD_RS1 basereg, name
+    TEST_BEGIN \name
     la      \basereg, store_anchor
     LIXT    a4, 0xaaaaaaaaaaaaaaaa
     sd      a4, 0(\basereg)
@@ -247,6 +262,7 @@
 .endm
 
 .macro T_SD_OFF off, name
+    TEST_BEGIN \name
     la      s0, store_anchor
     LIXT    a4, 0xaaaaaaaaaaaaaaaa
     sd      a4, \off(s0)
@@ -258,6 +274,7 @@
 .endm
 
 .macro T_SD_VAL rawval, name
+    TEST_BEGIN \name
     la      s0, store_anchor
     LIX     a4, \rawval
     sd      a4, 0(s0)
@@ -271,7 +288,7 @@
 /* =======================================================================
  *  SB : *(uint8_t *)(rs1 + off) = rs2[7:0]
  * ======================================================================= */
-test_base_sb:
+test_i_sb:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -282,6 +299,7 @@ test_base_sb:
     T_SB_RS2 s10, str_sb_rs2_s10
     T_SB_RS2 t6,  str_sb_rs2_t6
 
+    TEST_BEGIN str_sb_rs2_x0
     la      s0, store_anchor
     LIX     t0, 0x42
     sb      t0, 0(s0)
@@ -315,6 +333,7 @@ test_base_sb:
     T_SB_VAL 0xaa, str_sb_val_alt1
 
     /* --- upper bits of rs2 (beyond bit 7) must be discarded --- */
+    TEST_BEGIN str_sb_upper_ignored
     la      s0, store_anchor
     LIXT    a4, 0xdeadbeefdeadbe42
     sb      a4, 0(s0)
@@ -325,6 +344,7 @@ test_base_sb:
     call    check
 
     /* --- invariants: rs1 and rs2 both unmodified (pure write) --- */
+    TEST_BEGIN str_sb_rs1_preserved
     la      s0, store_anchor
     LIX     a4, 0x77
     mv      t3, s0
@@ -334,12 +354,14 @@ test_base_sb:
     mv      a1, t3
     mv      a2, s0
     call    check
+    TEST_BEGIN str_sb_rs2_preserved
     la      a0, str_sb_rs2_preserved
     mv      a1, t4
     mv      a2, a4
     call    check
 
     /* --- invariant: touches exactly 1 byte, nothing adjacent --- */
+    TEST_BEGIN str_sb_adjacent_before
     la      s0, store_anchor
     LIXT    t0, 0xaaaaaaaaaaaaaaaa
     REG_S   t0, -REG_BYTES(s0)
@@ -352,11 +374,13 @@ test_base_sb:
     LIXT    a1, 0xaaaaaaaaaaaaaaaa
     mv      a2, t1
     call    check
+    TEST_BEGIN str_sb_adjacent_after
     REG_L   t1, REG_BYTES(s0)
     la      a0, str_sb_adjacent_after
     LIXT    a1, 0xbbbbbbbbbbbbbbbb
     mv      a2, t1
     call    check
+    TEST_BEGIN str_sb_target_correct
     lbu     t1, 0(s0)
     la      a0, str_sb_target_correct
     LIX     a1, 0x99
@@ -370,7 +394,7 @@ test_base_sb:
 /* =======================================================================
  *  SH : *(uint16_t *)(rs1 + off) = rs2[15:0]
  * ======================================================================= */
-test_base_sh:
+test_i_sh:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -381,6 +405,7 @@ test_base_sh:
     T_SH_RS2 s10, str_sh_rs2_s10
     T_SH_RS2 t6,  str_sh_rs2_t6
 
+    TEST_BEGIN str_sh_rs2_x0
     la      s0, store_anchor
     LIX     t0, 0x4242
     sh      t0, 0(s0)
@@ -414,6 +439,7 @@ test_base_sh:
     T_SH_VAL 0xaaaa, str_sh_val_alt1
 
     /* --- upper bits of rs2 (beyond bit 15) must be discarded --- */
+    TEST_BEGIN str_sh_upper_ignored
     la      s0, store_anchor
     LIXT    a4, 0xdeadbeefcafe1234
     sh      a4, 0(s0)
@@ -424,6 +450,7 @@ test_base_sh:
     call    check
 
     /* --- invariants: rs1 and rs2 both unmodified (pure write) --- */
+    TEST_BEGIN str_sh_rs1_preserved
     la      s0, store_anchor
     LIX     a4, 0x7777
     mv      t3, s0
@@ -433,12 +460,14 @@ test_base_sh:
     mv      a1, t3
     mv      a2, s0
     call    check
+    TEST_BEGIN str_sh_rs2_preserved
     la      a0, str_sh_rs2_preserved
     mv      a1, t4
     mv      a2, a4
     call    check
 
     /* --- invariant: touches exactly 2 bytes, nothing adjacent --- */
+    TEST_BEGIN str_sh_adjacent_before
     la      s0, store_anchor
     LIXT    t0, 0xaaaaaaaaaaaaaaaa
     REG_S   t0, -REG_BYTES(s0)
@@ -451,11 +480,13 @@ test_base_sh:
     LIXT    a1, 0xaaaaaaaaaaaaaaaa
     mv      a2, t1
     call    check
+    TEST_BEGIN str_sh_adjacent_after
     REG_L   t1, REG_BYTES(s0)
     la      a0, str_sh_adjacent_after
     LIXT    a1, 0xbbbbbbbbbbbbbbbb
     mv      a2, t1
     call    check
+    TEST_BEGIN str_sh_target_correct
     lhu     t1, 0(s0)
     la      a0, str_sh_target_correct
     LIX     a1, 0x9999
@@ -469,7 +500,7 @@ test_base_sh:
 /* =======================================================================
  *  SW : *(uint32_t *)(rs1 + off) = rs2[31:0]
  * ======================================================================= */
-test_base_sw:
+test_i_sw:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -480,6 +511,7 @@ test_base_sw:
     T_SW_RS2 s10, str_sw_rs2_s10
     T_SW_RS2 t6,  str_sw_rs2_t6
 
+    TEST_BEGIN str_sw_rs2_x0
     la      s0, store_anchor
     LIX     t0, 0x42424242
     sw      t0, 0(s0)
@@ -516,6 +548,7 @@ test_base_sw:
     /* --- upper bits of rs2 (beyond bit 31) must be discarded (RV64
      *     only: on RV32 there are no bits beyond 31) --- */
     .if XLEN == 64
+    TEST_BEGIN str_sw_upper_ignored
     la      s0, store_anchor
     LIXT    a4, 0xdeadbeef12345678
     sw      a4, 0(s0)
@@ -527,6 +560,7 @@ test_base_sw:
     .endif
 
     /* --- invariants: rs1 and rs2 both unmodified (pure write) --- */
+    TEST_BEGIN str_sw_rs1_preserved
     la      s0, store_anchor
     LIX     a4, 0x77777777
     mv      t3, s0
@@ -536,12 +570,14 @@ test_base_sw:
     mv      a1, t3
     mv      a2, s0
     call    check
+    TEST_BEGIN str_sw_rs2_preserved
     la      a0, str_sw_rs2_preserved
     mv      a1, t4
     mv      a2, a4
     call    check
 
     /* --- invariant: touches exactly 4 bytes, nothing adjacent --- */
+    TEST_BEGIN str_sw_adjacent_before
     la      s0, store_anchor
     LIXT    t0, 0xaaaaaaaaaaaaaaaa
     REG_S   t0, -REG_BYTES(s0)
@@ -554,11 +590,13 @@ test_base_sw:
     LIXT    a1, 0xaaaaaaaaaaaaaaaa
     mv      a2, t1
     call    check
+    TEST_BEGIN str_sw_adjacent_after
     REG_L   t1, REG_BYTES(s0)
     la      a0, str_sw_adjacent_after
     LIXT    a1, 0xbbbbbbbbbbbbbbbb
     mv      a2, t1
     call    check
+    TEST_BEGIN str_sw_target_correct
     LWUX    t1, 0(s0)
     la      a0, str_sw_target_correct
     LIX     a1, 0x99999999
@@ -575,7 +613,7 @@ test_base_sw:
  *  SD : *(uint64_t *)(rs1 + off) = rs2  -- no upper-bits question, all
  *       64 bits of rs2 are meaningful and all 64 get written.
  * ======================================================================= */
-test_base_sd:
+test_i_sd:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -586,6 +624,7 @@ test_base_sd:
     T_SD_RS2 s10, str_sd_rs2_s10
     T_SD_RS2 t6,  str_sd_rs2_t6
 
+    TEST_BEGIN str_sd_rs2_x0
     la      s0, store_anchor
     LIXT    t0, 0x4242424242424242
     sd      t0, 0(s0)
@@ -621,6 +660,7 @@ test_base_sd:
     T_SD_VAL 0x0000000000000001, str_sd_val_one
 
     /* --- invariants: rs1 and rs2 both unmodified (pure write) --- */
+    TEST_BEGIN str_sd_rs1_preserved
     la      s0, store_anchor
     LIXT    a4, 0x7777777777777777
     mv      t3, s0
@@ -630,12 +670,14 @@ test_base_sd:
     mv      a1, t3
     mv      a2, s0
     call    check
+    TEST_BEGIN str_sd_rs2_preserved
     la      a0, str_sd_rs2_preserved
     mv      a1, t4
     mv      a2, a4
     call    check
 
     /* --- invariant: touches exactly 8 bytes, nothing adjacent --- */
+    TEST_BEGIN str_sd_adjacent_before
     la      s0, store_anchor
     LIXT    t0, 0xaaaaaaaaaaaaaaaa
     REG_S   t0, -REG_BYTES(s0)
@@ -648,11 +690,13 @@ test_base_sd:
     LIXT    a1, 0xaaaaaaaaaaaaaaaa
     mv      a2, t1
     call    check
+    TEST_BEGIN str_sd_adjacent_after
     REG_L   t1, REG_BYTES(s0)
     la      a0, str_sd_adjacent_after
     LIXT    a1, 0xbbbbbbbbbbbbbbbb
     mv      a2, t1
     call    check
+    TEST_BEGIN str_sd_target_correct
     ld      t1, 0(s0)
     la      a0, str_sd_target_correct
     LIXT    a1, 0x9999999999999999
@@ -668,24 +712,24 @@ test_base_sd:
 /* =======================================================================
  *  Entry point for this file
  * ======================================================================= */
-tests_base_stores:
+tests_i_stores:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
-    jal     ra, test_base_sb
-    jal     ra, test_base_sh
-    jal     ra, test_base_sw
+    jal     ra, test_i_sb
+    jal     ra, test_i_sh
+    jal     ra, test_i_sw
     .if XLEN == 64
-    jal     ra, test_base_sd
+    jal     ra, test_i_sd
     .endif
 
-    jal     ra, bitx_base_stores
+    jal     ra, bitx_i_stores
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
     ret
 
-bitx_base_stores:
+bitx_i_stores:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 

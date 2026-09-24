@@ -1,8 +1,8 @@
 /* =====================================================================
- * base/auipc.S  --  RV64I base-ISA AUIPC (add upper immediate to pc)
+ * i/auipc.S  --  RV64I base-ISA AUIPC (add upper immediate to pc)
  *
- * Part of the RV64I base-ISA suite; see base/tests.S for how this
- * plugs into the rest (main_tests.S -> base/tests.S -> here), and
+ * Part of the RV64I base-ISA suite; see i/tests.S for how this
+ * plugs into the rest (main_tests.S -> i/tests.S -> here), and
  * common.S for the boot/UART/reporting harness everything sits on
  * ("check", "uart_puts" are used from there; nothing else).
  *
@@ -45,18 +45,19 @@
  * restore the *real* sp, only then call into check()). rd=x0 is
  * tested too (must not fault, x0 must still read as 0).
  *
- * Bit independence across fields (bitx_base_auipc, at the end): every
+ * Bit independence across fields (bitx_i_auipc, at the end): every
  * bit pair among rd and the 20-bit immediate set together, C(25,2) =
  * 300 cases. See bitx.inc.
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
-    .option norvc            /* mandatory, not stylistic -- see base/loads.S */
+    .option norvc            /* mandatory, not stylistic -- see i/loads.S */
 
     .include "bitx.inc"
 
-    .global tests_base_auipc
+    .global tests_i_auipc
 
     .section .text
 
@@ -85,6 +86,7 @@
  * rdreg may be a0/a1/a2 -- result captured to t2 before those are
  * reused. */
 .macro T_AUIPC_REG rdreg, name
+    TEST_BEGIN \name
     LIXT    \rdreg, 0xdeadbeefdeadbeef
 .Lauipc_reg\@:
     auipc   \rdreg, 0x15
@@ -100,8 +102,9 @@
 
 /* T_AUIPC_VAL imm20, delta, name -- fixed rd=t1, sweep the immediate.
  * delta is the same sign-extended 64-bit contribution the equivalent
- * LUI immediate would produce (see base/lui.S). */
+ * LUI immediate would produce (see i/lui.S). */
 .macro T_AUIPC_VAL imm20, delta, name
+    TEST_BEGIN \name
 .Lauipc_val\@:
     auipc   t1, \imm20
     la      t3, .Lauipc_val\@
@@ -113,7 +116,7 @@
     call    check
 .endm
 
-tests_base_auipc:
+tests_i_auipc:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -126,6 +129,7 @@ tests_base_auipc:
     T_AUIPC_REG t6,  str_auipc_rd_t6
 
     /* --- rd=x0: must not fault, x0 must still read as 0 --- */
+    TEST_BEGIN str_auipc_rd_x0
 .Lauipc_x0:
     auipc   zero, 0x15
     la      a0, str_auipc_rd_x0
@@ -133,6 +137,7 @@ tests_base_auipc:
     mv      a2, zero
     call    check
 
+    TEST_BEGIN str_auipc_rd_sp
     /* --- rd=sp: same careful isolation as LUI's -- sp never holds a
      *     non-stack value across any call. --- */
     mv      t3, sp                  /* remember the real sp */
@@ -160,6 +165,7 @@ tests_base_auipc:
     T_AUIPC_VAL 0xaaaaa, 0xffffffffaaaaa000, str_auipc_imm_alt1
     T_AUIPC_VAL 0x55555, 0x0000000055555000, str_auipc_imm_alt0
 
+    TEST_BEGIN str_auipc_pc_relative
     /* --- genuine PC-relativity: two AUIPCs with the *same* immediate,
      *     at two different addresses, must differ by exactly the byte
      *     distance between them (the immediate cancels out). Nothing
@@ -181,13 +187,13 @@ tests_base_auipc:
     mv      a2, t2
     call    check
 
-    jal     ra, bitx_base_auipc
+    jal     ra, bitx_i_auipc
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
     ret
 
-bitx_base_auipc:
+bitx_i_auipc:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 

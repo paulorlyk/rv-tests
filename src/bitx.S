@@ -22,7 +22,8 @@
  *
  * Each case copies the instruction under test -- assembled by the
  * assembler into .rodata, so the encoding is the assembler's, not a
- * hand-built word -- onto its site, executes FENCE.I, zeroes s5 and
+ * hand-built word -- onto its site, executes FENCE.I (SYNC_I in
+ * harness.inc: skipped on a hart without Zifencei), zeroes s5 and
  * calls the site with "jalr s6". Wherever the transfer lands in the
  * sled, the increments that follow count the 2-byte slots left before
  * BX_EXIT, which returns through s6. So s5 = (BX_EXIT - landing) / 2
@@ -45,6 +46,7 @@
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
     .option norvc
 
@@ -86,7 +88,7 @@ bx_sled_init:
     addi    t3, t3, -1
     bnez    t3, 2b
 
-    fence.i
+    SYNC_I  t1                      /* FENCE.I, if the hart has it */
     li      t1, 1
     sw      t1, 0(t0)
 9:  ret

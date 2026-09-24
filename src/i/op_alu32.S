@@ -1,18 +1,18 @@
 /* =====================================================================
- * base/op_alu32.S  --  RV64I base-ISA OP-32 (R-type, word-width) ALU
+ * i/op_alu32.S  --  RV64I base-ISA OP-32 (R-type, word-width) ALU
  *                       instructions: ADDW, SUBW, SLLW, SRLW, SRAW
  *
- * Part of the RV64I base-ISA suite; see base/tests.S for how this
- * plugs into the rest (main_tests.S -> base/tests.S -> here), and
+ * Part of the RV64I base-ISA suite; see i/tests.S for how this
+ * plugs into the rest (main_tests.S -> i/tests.S -> here), and
  * common.S for the boot/UART/reporting harness everything sits on
  * ("check", "uart_puts" are used from there; nothing else).
  *
  * RV64-only: OP-32 doesn't exist on RV32 (its opcode is reserved
- * there), so on the RV32 image tests_base_op_alu32 is an empty stub
+ * there), so on the RV32 image tests_i_op_alu32 is an empty stub
  * and everything else in this file is assembled out.
  *
- * The word-width twins of base/op_alu.S's ADD/SUB/SLL/SRL/SRA, and the
- * register-register twins of base/op_imm32.S. The defining rule for
+ * The word-width twins of i/op_alu.S's ADD/SUB/SLL/SRL/SRA, and the
+ * register-register twins of i/op_imm32.S. The defining rule for
  * all five: the operation uses only the low 32 bits of rs1 (and of rs2
  * for ADDW/SUBW, rs2[4:0] for the shifts), and the 32-bit result is
  * *sign-extended* from bit 31 into bits 63:32. Each value test is
@@ -41,7 +41,7 @@
  * (c.addw, c.subw) the assembler would otherwise substitute for
  * x8-x15 operands with rd == rs1.
  *
- * Bit independence across fields (bitx_op_alu32, at the end): every
+ * Bit independence across fields (bitx_i_op_alu32, at the end): every
  * bit pair of rd/rs1/rs2, C(15,2) = 105 cases per instruction, with
  * the shared BX_C_RRR case macro -- no immediate, so the reference is
  * the same instruction in the t2/t3/t4 encoding that the T_OPW_VAL
@@ -49,13 +49,14 @@
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
     .option norvc            /* mandatory, not stylistic: see above
                                * (ADDW -> c.addw, SUBW -> c.subw) */
 
     .include "bitx.inc"
 
-    .global tests_base_op_alu32
+    .global tests_i_op_alu32
 
     .section .text
 
@@ -70,6 +71,7 @@
  * registers outside the swept list (rd=t2, rs1=t3, rs2=t4). reg may be
  * a0/a1/a2 -- result captured to t2 before those are reused. */
 .macro T_OPW_RD insn, rdreg, v1, v2, expect, name
+    TEST_BEGIN \name
     LIX     t3, \v1
     LIX     t4, \v2
     \insn   \rdreg, t3, t4
@@ -81,6 +83,7 @@
 .endm
 
 .macro T_OPW_RS1 insn, rs1reg, v1, v2, expect, name
+    TEST_BEGIN \name
     LIX     \rs1reg, \v1
     LIX     t4, \v2
     \insn   t2, \rs1reg, t4
@@ -91,6 +94,7 @@
 .endm
 
 .macro T_OPW_RS2 insn, rs2reg, v1, v2, expect, name
+    TEST_BEGIN \name
     LIX     t3, \v1
     LIX     \rs2reg, \v2
     \insn   t2, t3, \rs2reg
@@ -103,6 +107,7 @@
 /* T_OPW_VAL insn, v1, v2, expect, name -- fixed rd=t2/rs1=t3/rs2=t4,
  * sweep the operand values. */
 .macro T_OPW_VAL insn, v1, v2, expect, name
+    TEST_BEGIN \name
     LIX     t3, \v1
     LIX     t4, \v2
     \insn   t2, t3, t4
@@ -115,6 +120,7 @@
 /* T_OPW_PRESERVED insn, v2, name1, name2 -- the instruction must not
  * write back to either source register (all 64 bits of each). */
 .macro T_OPW_PRESERVED insn, v2, name1, name2
+    TEST_BEGIN \name1
     LIX     t3, 0x123456789abcdef0
     LIX     t4, \v2
     mv      t5, t3
@@ -124,13 +130,14 @@
     mv      a1, t5
     mv      a2, t3
     call    check
+    TEST_BEGIN \name2
     la      a0, \name2
     mv      a1, t6
     mv      a2, t4
     call    check
 .endm
 
-tests_base_op_alu32:
+tests_i_op_alu32:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -159,18 +166,21 @@ tests_base_op_alu32:
     T_OPW_RS2 addw, t6,  0xdead000000000064, 0xbeef000000000017, 123, str_opw_rs2_t6
 
     /* rs1=x0 / rs2=x0 / rd=x0 */
+    TEST_BEGIN str_opw_rs1_x0
     LIX     t4, 0x00000000ffffffff
     addw    t2, x0, t4
     la      a0, str_opw_rs1_x0
     LIX     a1, 0xffffffffffffffff
     mv      a2, t2
     call    check
+    TEST_BEGIN str_opw_rs2_x0
     LIX     t3, 0xdeadbeef80000000
     addw    t2, t3, x0
     la      a0, str_opw_rs2_x0
     LIX     a1, 0xffffffff80000000
     mv      a2, t2
     call    check
+    TEST_BEGIN str_opw_rd_x0
     LIX     t3, 100
     LIX     t4, 23
     addw    x0, t3, t4
@@ -179,6 +189,7 @@ tests_base_op_alu32:
     mv      a2, x0
     call    check
 
+    TEST_BEGIN str_opw_alias_all_same
     /* ===== aliasing (through ADDW): every register-overlap
      * combination, each crossing the 32-bit overflow so the sign
      * extension is visible too ===== */
@@ -189,6 +200,7 @@ tests_base_op_alu32:
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_opw_alias_rd_rs1
     LIX     t1, 0x000000007fffffff
     LIX     t2, 1
     addw    t1, t1, t2              /* rd==rs1 */
@@ -197,6 +209,7 @@ tests_base_op_alu32:
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_opw_alias_rd_rs2
     LIX     t1, 0x000000007fffffff
     LIX     t2, 1
     addw    t2, t1, t2              /* rd==rs2 */
@@ -205,6 +218,7 @@ tests_base_op_alu32:
     mv      a2, t2
     call    check
 
+    TEST_BEGIN str_opw_alias_rs1_rs2
     LIX     t1, 0x0000000040000000
     addw    t2, t1, t1              /* rs1==rs2, rd distinct */
     la      a0, str_opw_alias_rs1_rs2
@@ -278,14 +292,14 @@ tests_base_op_alu32:
     T_OPW_PRESERVED srlw, 0xdeadbeef00000004, str_srlw_rs1_preserved, str_srlw_rs2_preserved
     T_OPW_PRESERVED sraw, 0xdeadbeef00000004, str_sraw_rs1_preserved, str_sraw_rs2_preserved
 
-    jal     ra, bitx_op_alu32
+    jal     ra, bitx_i_op_alu32
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
     ret
 
 /* Bit independence across fields -- see the file header and bitx.inc. */
-bitx_op_alu32:
+bitx_i_op_alu32:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -307,7 +321,7 @@ bitx_op_alu32:
 
     .else   /* XLEN == 32: OP-32 doesn't exist */
 
-tests_base_op_alu32:
+tests_i_op_alu32:
     ret
 
     .endif

@@ -1,9 +1,9 @@
 /* =====================================================================
- * base/loads.S  --  RV64I base-ISA load instructions: LB, LH, LW, LD,
+ * i/loads.S  --  RV64I base-ISA load instructions: LB, LH, LW, LD,
  *                    LBU, LHU, LWU
  *
- * Part of the RV64I base-ISA suite; see base/tests.S for how this
- * plugs into the rest (main_tests.S -> base/tests.S -> here), and
+ * Part of the RV64I base-ISA suite; see i/tests.S for how this
+ * plugs into the rest (main_tests.S -> i/tests.S -> here), and
  * common.S for the boot/UART/reporting harness everything sits on
  * ("check", "uart_puts" are used from there; nothing else).
  *
@@ -41,7 +41,7 @@
  * them transparently. This is not guaranteed portable to all real
  * hardware; see the README.
  *
- * Bit independence across fields (bitx_base_loads, called last): every
+ * Bit independence across fields (bitx_i_loads, called last): every
  * bit pair among rd, rs1 and the 12-bit offset set together, C(22,2) =
  * 231 cases per instruction, for all seven. See bitx.inc and BX_C_LD
  * below for how the base is chosen so every access stays aligned.
@@ -51,6 +51,7 @@
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
     .option norvc            /* mandatory here, not just stylistic: without
                                * it the assembler would silently substitute
@@ -61,7 +62,7 @@
 
     .include "bitx.inc"
 
-    .global tests_base_loads
+    .global tests_i_loads
 
     .section .text
 
@@ -95,6 +96,7 @@
  *  Shared macros, byte width (LB / LBU)
  * ======================================================================= */
 .macro T_LB8_RD insn, rdreg, expect, name
+    TEST_BEGIN \name
     la      s0, base_anchor
     LIX     t0, 0xaa
     sb      t0, 0(s0)
@@ -107,6 +109,7 @@
 .endm
 
 .macro T_LB8_RS1 insn, basereg, expect, name
+    TEST_BEGIN \name
     la      \basereg, base_anchor
     LIX     t1, 0xaa                /* t1, not t0: t0 is itself one of the
                                       * swept basereg candidates, and using
@@ -121,6 +124,7 @@
 .endm
 
 .macro T_LB8_OFF insn, off, expect, name
+    TEST_BEGIN \name
     la      s0, base_anchor
     LIX     t0, 0xaa
     sb      t0, \off(s0)
@@ -132,6 +136,7 @@
 .endm
 
 .macro T_LB8_VAL insn, rawval, expect, name
+    TEST_BEGIN \name
     la      s0, base_anchor
     LIX     t0, \rawval
     sb      t0, 0(s0)
@@ -146,6 +151,7 @@
  *  Shared macros, halfword width (LH / LHU)
  * ======================================================================= */
 .macro T_LH16_RD insn, rdreg, expect, name
+    TEST_BEGIN \name
     la      s0, base_anchor
     LIX     t0, 0xaaaa
     sh      t0, 0(s0)
@@ -158,6 +164,7 @@
 .endm
 
 .macro T_LH16_RS1 insn, basereg, expect, name
+    TEST_BEGIN \name
     la      \basereg, base_anchor
     LIX     t1, 0xaaaa              /* t1, not t0 -- see T_LB8_RS1 */
     sh      t1, 0(\basereg)
@@ -169,6 +176,7 @@
 .endm
 
 .macro T_LH16_OFF insn, off, expect, name
+    TEST_BEGIN \name
     la      s0, base_anchor
     LIX     t0, 0xaaaa
     sh      t0, \off(s0)
@@ -180,6 +188,7 @@
 .endm
 
 .macro T_LH16_VAL insn, rawval, expect, name
+    TEST_BEGIN \name
     la      s0, base_anchor
     LIX     t0, \rawval
     sh      t0, 0(s0)
@@ -194,6 +203,7 @@
  *  Shared macros, word width (LW / LWU)
  * ======================================================================= */
 .macro T_LW32_RD insn, rdreg, expect, name
+    TEST_BEGIN \name
     la      s0, base_anchor
     LIX     t0, 0xaaaaaaaa
     sw      t0, 0(s0)
@@ -206,6 +216,7 @@
 .endm
 
 .macro T_LW32_RS1 insn, basereg, expect, name
+    TEST_BEGIN \name
     la      \basereg, base_anchor
     LIX     t1, 0xaaaaaaaa          /* t1, not t0 -- see T_LB8_RS1 */
     sw      t1, 0(\basereg)
@@ -217,6 +228,7 @@
 .endm
 
 .macro T_LW32_OFF insn, off, expect, name
+    TEST_BEGIN \name
     la      s0, base_anchor
     LIX     t0, 0xaaaaaaaa
     sw      t0, \off(s0)
@@ -228,6 +240,7 @@
 .endm
 
 .macro T_LW32_VAL insn, rawval, expect, name
+    TEST_BEGIN \name
     la      s0, base_anchor
     LIX     t0, \rawval
     sw      t0, 0(s0)
@@ -242,6 +255,7 @@
  *  Shared macros, doubleword width (LD only -- no signedness question)
  * ======================================================================= */
 .macro T_LD64_RD rdreg, name
+    TEST_BEGIN \name
     la      s0, base_anchor
     LIXT    t0, 0xaaaaaaaaaaaaaaaa
     sd      t0, 0(s0)
@@ -254,6 +268,7 @@
 .endm
 
 .macro T_LD64_RS1 basereg, name
+    TEST_BEGIN \name
     la      \basereg, base_anchor
     LIXT    t1, 0xaaaaaaaaaaaaaaaa  /* t1, not t0 -- see T_LB8_RS1 */
     sd      t1, 0(\basereg)
@@ -265,6 +280,7 @@
 .endm
 
 .macro T_LD64_OFF off, name
+    TEST_BEGIN \name
     la      s0, base_anchor
     LIXT    t0, 0xaaaaaaaaaaaaaaaa
     sd      t0, \off(s0)
@@ -276,6 +292,7 @@
 .endm
 
 .macro T_LD64_VAL rawval, name
+    TEST_BEGIN \name
     la      s0, base_anchor
     LIX     t0, \rawval
     sd      t0, 0(s0)
@@ -289,7 +306,7 @@
 /* =======================================================================
  *  LB : rd = sign_extend8(*(int8_t *)(rs1 + off))
  * ======================================================================= */
-test_base_lb:
+test_i_lb:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -300,6 +317,7 @@ test_base_lb:
     T_LB8_RD lb, s10, 0xffffffffffffffaa, str_lb_rd_s10
     T_LB8_RD lb, t6,  0xffffffffffffffaa, str_lb_rd_t6
 
+    TEST_BEGIN str_lb_rd_x0
     la      s0, base_anchor
     LIX     t0, 0xaa
     sb      t0, 0(s0)
@@ -331,6 +349,7 @@ test_base_lb:
     T_LB8_VAL lb, 0x55, 0x0000000000000055, str_lb_val_alt0
     T_LB8_VAL lb, 0xaa, 0xffffffffffffffaa, str_lb_val_alt1
 
+    TEST_BEGIN str_lb_rs1_preserved
     la      s0, base_anchor
     LIX     t0, 0x55
     sb      t0, 0(s0)
@@ -341,6 +360,7 @@ test_base_lb:
     mv      a2, s0
     call    check
 
+    TEST_BEGIN str_lb_mem_unchanged
     lbu     t4, 0(s0)
     la      a0, str_lb_mem_unchanged
     LIX     a1, 0x55
@@ -354,7 +374,7 @@ test_base_lb:
 /* =======================================================================
  *  LBU : rd = zero_extend8(*(uint8_t *)(rs1 + off))
  * ======================================================================= */
-test_base_lbu:
+test_i_lbu:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -365,6 +385,7 @@ test_base_lbu:
     T_LB8_RD lbu, s10, 0x00000000000000aa, str_lbu_rd_s10
     T_LB8_RD lbu, t6,  0x00000000000000aa, str_lbu_rd_t6
 
+    TEST_BEGIN str_lbu_rd_x0
     la      s0, base_anchor
     LIX     t0, 0xaa
     sb      t0, 0(s0)
@@ -396,6 +417,7 @@ test_base_lbu:
     T_LB8_VAL lbu, 0x55, 0x0000000000000055, str_lbu_val_alt0
     T_LB8_VAL lbu, 0xaa, 0x00000000000000aa, str_lbu_val_alt1
 
+    TEST_BEGIN str_lbu_rs1_preserved
     la      s0, base_anchor
     LIX     t0, 0x55
     sb      t0, 0(s0)
@@ -406,6 +428,7 @@ test_base_lbu:
     mv      a2, s0
     call    check
 
+    TEST_BEGIN str_lbu_mem_unchanged
     lbu     t4, 0(s0)
     la      a0, str_lbu_mem_unchanged
     LIX     a1, 0x55
@@ -419,7 +442,7 @@ test_base_lbu:
 /* =======================================================================
  *  LH : rd = sign_extend16(*(int16_t *)(rs1 + off))
  * ======================================================================= */
-test_base_lh:
+test_i_lh:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -430,6 +453,7 @@ test_base_lh:
     T_LH16_RD lh, s10, 0xffffffffffffaaaa, str_lh_rd_s10
     T_LH16_RD lh, t6,  0xffffffffffffaaaa, str_lh_rd_t6
 
+    TEST_BEGIN str_lh_rd_x0
     la      s0, base_anchor
     LIX     t0, 0xaaaa
     sh      t0, 0(s0)
@@ -461,6 +485,7 @@ test_base_lh:
     T_LH16_VAL lh, 0x5555, 0x0000000000005555, str_lh_val_alt0
     T_LH16_VAL lh, 0xaaaa, 0xffffffffffffaaaa, str_lh_val_alt1
 
+    TEST_BEGIN str_lh_rs1_preserved
     la      s0, base_anchor
     LIX     t0, 0x5555
     sh      t0, 0(s0)
@@ -471,6 +496,7 @@ test_base_lh:
     mv      a2, s0
     call    check
 
+    TEST_BEGIN str_lh_mem_unchanged
     lhu     t4, 0(s0)
     la      a0, str_lh_mem_unchanged
     LIX     a1, 0x5555
@@ -484,7 +510,7 @@ test_base_lh:
 /* =======================================================================
  *  LHU : rd = zero_extend16(*(uint16_t *)(rs1 + off))
  * ======================================================================= */
-test_base_lhu:
+test_i_lhu:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -495,6 +521,7 @@ test_base_lhu:
     T_LH16_RD lhu, s10, 0x000000000000aaaa, str_lhu_rd_s10
     T_LH16_RD lhu, t6,  0x000000000000aaaa, str_lhu_rd_t6
 
+    TEST_BEGIN str_lhu_rd_x0
     la      s0, base_anchor
     LIX     t0, 0xaaaa
     sh      t0, 0(s0)
@@ -526,6 +553,7 @@ test_base_lhu:
     T_LH16_VAL lhu, 0x5555, 0x0000000000005555, str_lhu_val_alt0
     T_LH16_VAL lhu, 0xaaaa, 0x000000000000aaaa, str_lhu_val_alt1
 
+    TEST_BEGIN str_lhu_rs1_preserved
     la      s0, base_anchor
     LIX     t0, 0x5555
     sh      t0, 0(s0)
@@ -536,6 +564,7 @@ test_base_lhu:
     mv      a2, s0
     call    check
 
+    TEST_BEGIN str_lhu_mem_unchanged
     lhu     t4, 0(s0)
     la      a0, str_lhu_mem_unchanged
     LIX     a1, 0x5555
@@ -549,7 +578,7 @@ test_base_lhu:
 /* =======================================================================
  *  LW : rd = sign_extend32(*(int32_t *)(rs1 + off))
  * ======================================================================= */
-test_base_lw:
+test_i_lw:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -560,6 +589,7 @@ test_base_lw:
     T_LW32_RD lw, s10, 0xffffffffaaaaaaaa, str_lw_rd_s10
     T_LW32_RD lw, t6,  0xffffffffaaaaaaaa, str_lw_rd_t6
 
+    TEST_BEGIN str_lw_rd_x0
     la      s0, base_anchor
     LIX     t0, 0xaaaaaaaa
     sw      t0, 0(s0)
@@ -592,6 +622,7 @@ test_base_lw:
     T_LW32_VAL lw, 0xaaaaaaaa, 0xffffffffaaaaaaaa, str_lw_val_alt1
     T_LW32_VAL lw, 0xdeadbeef, 0xffffffffdeadbeef, str_lw_val_deadbeef
 
+    TEST_BEGIN str_lw_rs1_preserved
     la      s0, base_anchor
     LIX     t0, 0x55555555
     sw      t0, 0(s0)
@@ -602,6 +633,7 @@ test_base_lw:
     mv      a2, s0
     call    check
 
+    TEST_BEGIN str_lw_mem_unchanged
     .if XLEN == 64
     lwu     t4, 0(s0)
     .else
@@ -622,7 +654,7 @@ test_base_lw:
  *  LWU : rd = zero_extend32(*(uint32_t *)(rs1 + off))  -- RV64-only;
  *        needed because plain LW always sign-extends.
  * ======================================================================= */
-test_base_lwu:
+test_i_lwu:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -633,6 +665,7 @@ test_base_lwu:
     T_LW32_RD lwu, s10, 0x00000000aaaaaaaa, str_lwu_rd_s10
     T_LW32_RD lwu, t6,  0x00000000aaaaaaaa, str_lwu_rd_t6
 
+    TEST_BEGIN str_lwu_rd_x0
     la      s0, base_anchor
     LIX     t0, 0xaaaaaaaa
     sw      t0, 0(s0)
@@ -665,6 +698,7 @@ test_base_lwu:
     T_LW32_VAL lwu, 0xaaaaaaaa, 0x00000000aaaaaaaa, str_lwu_val_alt1
     T_LW32_VAL lwu, 0xdeadbeef, 0x00000000deadbeef, str_lwu_val_deadbeef
 
+    TEST_BEGIN str_lwu_rs1_preserved
     la      s0, base_anchor
     LIX     t0, 0x55555555
     sw      t0, 0(s0)
@@ -675,6 +709,7 @@ test_base_lwu:
     mv      a2, s0
     call    check
 
+    TEST_BEGIN str_lwu_mem_unchanged
     lwu     t4, 0(s0)
     la      a0, str_lwu_mem_unchanged
     LIX     a1, 0x55555555
@@ -688,7 +723,7 @@ test_base_lwu:
 /* =======================================================================
  *  LD : rd = *(uint64_t *)(rs1 + off)  -- exact, no extension question.
  * ======================================================================= */
-test_base_ld:
+test_i_ld:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -699,6 +734,7 @@ test_base_ld:
     T_LD64_RD s10, str_ld_rd_s10
     T_LD64_RD t6,  str_ld_rd_t6
 
+    TEST_BEGIN str_ld_rd_x0
     la      s0, base_anchor
     LIXT    t0, 0xaaaaaaaaaaaaaaaa
     sd      t0, 0(s0)
@@ -732,6 +768,7 @@ test_base_ld:
     T_LD64_VAL 0x0123456789abcdef, str_ld_val_walking
     T_LD64_VAL 0x0000000000000001, str_ld_val_one
 
+    TEST_BEGIN str_ld_rs1_preserved
     la      s0, base_anchor
     LIX     t0, 0x0123456789abcdef
     sd      t0, 0(s0)
@@ -742,6 +779,7 @@ test_base_ld:
     mv      a2, s0
     call    check
 
+    TEST_BEGIN str_ld_mem_unchanged
     ld      t4, 0(s0)
     la      a0, str_ld_mem_unchanged
     LIX     a1, 0x0123456789abcdef
@@ -757,27 +795,27 @@ test_base_ld:
 /* =======================================================================
  *  Entry point for this file
  * ======================================================================= */
-tests_base_loads:
+tests_i_loads:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
-    jal     ra, test_base_lb
-    jal     ra, test_base_lbu
-    jal     ra, test_base_lh
-    jal     ra, test_base_lhu
-    jal     ra, test_base_lw
+    jal     ra, test_i_lb
+    jal     ra, test_i_lbu
+    jal     ra, test_i_lh
+    jal     ra, test_i_lhu
+    jal     ra, test_i_lw
     .if XLEN == 64
-    jal     ra, test_base_lwu
-    jal     ra, test_base_ld
+    jal     ra, test_i_lwu
+    jal     ra, test_i_ld
     .endif
 
-    jal     ra, bitx_base_loads
+    jal     ra, bitx_i_loads
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
     ret
 
-bitx_base_loads:
+bitx_i_loads:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 

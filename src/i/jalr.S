@@ -1,14 +1,14 @@
 /* =====================================================================
- * base/jalr.S  --  RV64I base-ISA JALR (jump and link register)
+ * i/jalr.S  --  RV64I base-ISA JALR (jump and link register)
  *
- * Part of the RV64I base-ISA suite; see base/tests.S for how this
- * plugs into the rest (main_tests.S -> base/tests.S -> here), and
+ * Part of the RV64I base-ISA suite; see i/tests.S for how this
+ * plugs into the rest (main_tests.S -> i/tests.S -> here), and
  * common.S for the boot/UART/reporting harness everything sits on
  * ("check", "uart_puts" are used from there; nothing else).
  *
  * JALR is I-type: target = (rs1 + sign_extend(imm12)) & ~1, and
  * rd = pc + 4. Three things make it meaningfully different from JAL
- * (base/jal.S) and worth its own distinct coverage rather than a
+ * (i/jal.S) and worth its own distinct coverage rather than a
  * copy of that file's structure:
  *
  *   1. The target is register-relative, not PC-relative, so the
@@ -35,13 +35,14 @@
  * the `ret` / `jr` pseudo-instructions, so what's being tested is
  * unambiguous.
  *
- * Bit independence across fields (bitx_base_jalr, at the end): every
+ * Bit independence across fields (bitx_i_jalr, at the end): every
  * bit pair among rd, rs1 and the 12-bit immediate set together, C(22,2)
  * = 231 cases, each checked for both the landing point (in the counting
  * sled built by bitx.S) and the link value. See bitx.inc.
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
     .option norvc            /* mandatory, not stylistic: JALR *does* have
                                * compressed forms (C.JR / C.JALR) that the
@@ -51,7 +52,7 @@
 
     .include "bitx.inc"
 
-    .global tests_base_jalr
+    .global tests_i_jalr
 
     .section .text
 
@@ -91,6 +92,7 @@
  * a0/a1/a2, so the link value is captured into s5 before check()
  * runs. */
 .macro T_JALR_REG rdreg, name_landed, name_link
+    TEST_BEGIN \name_landed
     LIX     s4, 0
     la      s3, 1f
 .Ljalr_reg\@:
@@ -103,6 +105,7 @@
     mv      a2, s4
     call    check
 
+    TEST_BEGIN \name_link
     la      t3, .Ljalr_reg\@
     addi    t3, t3, 4               /* expected link = this JALR's addr + 4 */
     la      a0, \name_link
@@ -115,6 +118,7 @@
  * at x0 so the link plays no part here. basereg may be a0/a1/a2: it's
  * fully consumed by the jump before a0-a2 are reused. */
 .macro T_JALR_RS1 basereg, name
+    TEST_BEGIN \name
     LIX     s4, 0
     la      \basereg, 1f
     jalr    zero, \basereg, 0
@@ -133,6 +137,7 @@
  * immediate can leave the -(-2048) = +2048 case outside addi's own
  * -2048..+2047 range. */
 .macro T_JALR_IMM imm, name
+    TEST_BEGIN \name
     LIX     s4, 0
     la      s3, 1f
     LIX     t0, \imm
@@ -146,7 +151,7 @@
     call    check
 .endm
 
-tests_base_jalr:
+tests_i_jalr:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -159,6 +164,7 @@ tests_base_jalr:
     T_JALR_REG t6,  str_jalr_landed_t6,  str_jalr_link_t6
 
     /* --- rd=x0: the standard indirect-jump / return idiom --- */
+    TEST_BEGIN str_jalr_rd_x0
     LIX     s4, 0
     la      s3, 1f
     jalr    zero, s3, 0
@@ -197,6 +203,7 @@ tests_base_jalr:
     T_JALR_IMM 2047,  str_jalr_imm_max
     T_JALR_IMM -2048, str_jalr_imm_min
 
+    TEST_BEGIN str_jalr_lsb_cleared
     /* --- the low bit of the computed target must be CLEARED, not
      *     preserved: base deliberately set to (target | 1), which must
      *     still land exactly on target. This is the behaviour that
@@ -213,6 +220,7 @@ tests_base_jalr:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_jalr_lsb_cleared_imm
     /* --- same, but with the odd bit arriving via the immediate
      *     rather than the base register --- */
     LIX     s4, 0
@@ -226,6 +234,7 @@ tests_base_jalr:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_jalr_alias_landed
     /* --- rd == rs1 aliasing: the old rs1 must be read as the jump
      *     target *before* rd is overwritten with the link address. An
      *     implementation that writes the link first would jump to the
@@ -242,6 +251,7 @@ tests_base_jalr:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_jalr_alias_link
     la      t3, .Ljalr_alias
     addi    t3, t3, 4
     la      a0, str_jalr_alias_link
@@ -249,6 +259,7 @@ tests_base_jalr:
     mv      a2, s5
     call    check
 
+    TEST_BEGIN str_jalr_call_return
     /* --- a real call/return round trip through JALR in both roles:
      *     JALR to call a subroutine, JALR to return from it --- */
     LIX     s4, 0
@@ -259,13 +270,13 @@ tests_base_jalr:
     mv      a2, s4
     call    check
 
-    jal     ra, bitx_base_jalr
+    jal     ra, bitx_i_jalr
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
     ret
 
-bitx_base_jalr:
+bitx_i_jalr:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 

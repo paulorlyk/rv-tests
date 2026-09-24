@@ -1,15 +1,15 @@
 /* =====================================================================
- * rvc/quadrant2.S  --  RVC quadrant 2 (compressed opcode bits[1:0]=10):
+ * c/quadrant2.S  --  RVC quadrant 2 (compressed opcode bits[1:0]=10):
  *                       C.SLLI, C.LWSP, C.LDSP, C.JR, C.MV, C.EBREAK,
  *                       C.JALR, C.ADD, C.SWSP, C.SDSP
  *
- * Part of the RV64C test suite; see rvc/tests.S for the overall
+ * Part of the RV64C test suite; see c/tests.S for the overall
  * structure and common.S for the boot/UART/reporting harness this
  * builds on ("check", "uart_puts", "ebreak_flag", etc. are provided
  * there). This file's only entry point called from outside is
- * tests_quadrant2, invoked once by run_tests (in rvc/tests.S).
+ * tests_c_quadrant2, invoked once by run_tests (in c/tests.S).
  *
- * Bit independence across fields (bitx_quadrant2, called last): every
+ * Bit independence across fields (bitx_c_quadrant2, called last): every
  * bit pair among each instruction's variable fields set together, for
  * every instruction here except C.EBREAK (no variable fields): 55
  * cases for C.SLLI and the four SP-relative loads/stores, 45 for C.MV
@@ -22,12 +22,13 @@
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
     .option norvc
 
     .include "bitx.inc"
 
-    .global tests_quadrant2
+    .global tests_c_quadrant2
 
     .section .text
 
@@ -158,6 +159,7 @@
      * so a "leave unchanged" bug would be caught, not just a "combine"
      * bug. rdreg may itself be a0/a1/a2. */
     .macro T_MV_RD rdreg, name
+    TEST_BEGIN \name
     LIXT    a6, 0x1122334455667788
     LIXT    \rdreg, 0xdeadbeefdeadbeef
     .option rvc
@@ -175,6 +177,7 @@
      * itself before a0-a2 are touched, so rs2reg may safely be
      * a0/a1/a2 with no separate capture needed. */
     .macro T_MV_RS2 rs2reg, name
+    TEST_BEGIN \name
     LIXT    \rs2reg, 0x1122334455667788
     LIXT    t1, 0xdeadbeefdeadbeef
     .option rvc
@@ -190,6 +193,7 @@
      * not a hazard (unlike the CA-format ops' rd==rs2 aliasing, there
      * is no separate combine step here to collapse). */
     .macro T_MV_ALIAS reg, name
+    TEST_BEGIN \name
     LIXT    \reg, 0x123456789abcdef0
     .option rvc
     c.mv    \reg, \reg
@@ -206,6 +210,7 @@
      * needs to rule out is truncation (e.g. only copying 32 of 64
      * bits), so the values here are chosen to make that visible. */
     .macro T_MV_VAL val, name
+    TEST_BEGIN \name
     LIXT    t2, \val
     LIXT    t1, 0xdeadbeefdeadbeef
     .option rvc
@@ -262,6 +267,7 @@ test_c_mv:
     T_MV_VAL 0x0000000000000001, str_mv_val_one
 
     /* --- invariant: C.MV must not modify rs2 --- */
+    TEST_BEGIN str_mv_rs2_preserved
     LIX     t1, 0
     LIX     t2, 0x99999999
     mv      t3, t2
@@ -280,6 +286,7 @@ test_c_mv:
     /* T_ADD_RD rdreg, name -- sweep the full 5-bit rd field. Fixed
      * rs2=a6 (outside the sweep set). rdreg may be a0/a1/a2. */
     .macro T_ADD_RD rdreg, name
+    TEST_BEGIN \name
     LIX     a6, 23
     LIX     \rdreg, 100
     .option rvc
@@ -295,6 +302,7 @@ test_c_mv:
     /* T_ADD_RS2 rs2reg, name -- sweep the full 5-bit rs2 field, fixed
      * rd=t1. rs2reg is consumed by c.add before a0-a2 are touched. */
     .macro T_ADD_RS2 rs2reg, name
+    TEST_BEGIN \name
     LIX     \rs2reg, 23
     LIX     t1, 100
     .option rvc
@@ -312,6 +320,7 @@ test_c_mv:
      * (not just C.ADD's general value sweep) at the aliased encoding
      * specifically. */
     .macro T_ADD_ALIAS reg, val, expect, name
+    TEST_BEGIN \name
     LIXT    \reg, \val
     .option rvc
     c.add   \reg, \reg
@@ -326,6 +335,7 @@ test_c_mv:
     /* T_ADD_VAL base, other, expect, name -- data-pattern sweep, fixed
      * rd=t1/rs2=t2. */
     .macro T_ADD_VAL base, other, expect, name
+    TEST_BEGIN \name
     LIXT    t1, \base
     LIXT    t2, \other
     .option rvc
@@ -380,6 +390,7 @@ test_c_add:
     T_ADD_VAL 0xaaaaaaaaaaaaaaaa, 0x5555555555555555, 0xffffffffffffffff, str_add_val_complementary
 
     /* --- invariant: C.ADD must not modify rs2 --- */
+    TEST_BEGIN str_add_rs2_preserved
     LIX     t1, 5
     LIX     t2, 7
     mv      t3, t2
@@ -399,6 +410,7 @@ test_c_add:
      * (not restricted to x8-x15, unlike C.SRLI/C.SRAI's CB format).
      * Fixed shamt=8, walking-bit-pattern input. reg may be a0/a1/a2. */
     .macro T_SLLI_REG reg, name
+    TEST_BEGIN \name
     LIXT    \reg, 0x0123456789abcdef
     .option rvc
     c.slli  \reg, 8
@@ -418,6 +430,7 @@ test_c_add:
      * register t1, input = all-ones so the number of zero bits shifted
      * in from the bottom is exactly readable off the expected value. */
     .macro T_SLLI_SHAMT shamt, expect, name
+    TEST_BEGIN \name
     LIX     t1, 0xffffffffffffffff
     .option rvc
     c.slli  t1, \shamt
@@ -466,6 +479,7 @@ test_c_slli:
     T_SLLI_SHAMT 10, 0xfffffc00, str_slli_sh10  /* alt pattern 01010 */
     .endif
 
+    TEST_BEGIN str_slli_truncates
     /* --- truncation, not rotation: the bit shifted past bit 63 must be
      *     discarded, never reappear at bit 0 --- */
     LIX     t1, INTX_MIN | 1
@@ -477,6 +491,7 @@ test_c_slli:
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_slli_bit0_to_top
     /* --- complementary case: a single bit walking all the way from
      *     bit 0 to bit 63 --- */
     LIX     t1, 0x0000000000000001
@@ -500,6 +515,7 @@ test_c_slli:
  * ======================================================================= */
 
 .macro T_LWSP_RD rdreg, name
+    TEST_BEGIN \name
     LIX     t0, 0x11223344
     sw      t0, 0(sp)
     .option rvc
@@ -513,6 +529,7 @@ test_c_slli:
 .endm
 
 .macro T_LWSP_OFF off, name
+    TEST_BEGIN \name
     LIX     t0, 0x11223344
     sw      t0, \off(sp)
     .option rvc
@@ -525,6 +542,7 @@ test_c_slli:
 .endm
 
 .macro T_LWSP_VAL val, expect64, name
+    TEST_BEGIN \name
     LIX     t0, \val
     sw      t0, 0(sp)
     .option rvc
@@ -576,6 +594,7 @@ test_c_lwsp:
     T_LWSP_VAL 0x00000001, 0x0000000000000001, str_lwsp_val_one
 
     /* --- invariant: C.LWSP must not modify sp itself (pure read) --- */
+    TEST_BEGIN str_lwsp_sp_preserved
     mv      t3, sp
     .option rvc
     c.lwsp  t1, 0(sp)
@@ -597,6 +616,7 @@ test_c_lwsp:
  * ======================================================================= */
 
 .macro T_SWSP_RS2 rs2reg, name
+    TEST_BEGIN \name
     LIX     \rs2reg, 0x11223344
     .option rvc
     c.swsp  \rs2reg, 0(sp)
@@ -609,6 +629,7 @@ test_c_lwsp:
 .endm
 
 .macro T_SWSP_OFF off, name
+    TEST_BEGIN \name
     LIX     t1, 0x11223344
     .option rvc
     c.swsp  t1, \off(sp)
@@ -621,6 +642,7 @@ test_c_lwsp:
 .endm
 
 .macro T_SWSP_VAL val, name
+    TEST_BEGIN \name
     LIX     t1, \val
     .option rvc
     c.swsp  t1, 0(sp)
@@ -648,6 +670,7 @@ test_c_swsp:
     T_SWSP_RS2 s10, str_swsp_rs2_s10
     T_SWSP_RS2 t6,  str_swsp_rs2_t6
 
+    TEST_BEGIN str_swsp_rs2_x0
     /* --- rs2=x0: storing the always-zero register is a distinct,
      *     legal case C.LWSP's rd sweep can't cover (rd=x0 is rejected
      *     there) --- */
@@ -684,6 +707,7 @@ test_c_swsp:
     T_SWSP_VAL 0x00000001, str_swsp_val_one
 
     /* --- invariant: C.SWSP must not modify sp itself --- */
+    TEST_BEGIN str_swsp_sp_preserved
     mv      t3, sp
     LIX     t1, 0x11223344
     .option rvc
@@ -706,6 +730,7 @@ test_c_swsp:
  * ======================================================================= */
 
 .macro T_LDSP_RD rdreg, name
+    TEST_BEGIN \name
     LIX     t0, 0x1122334455667788
     REG_S   t0, 0(sp)
     .option rvc
@@ -719,6 +744,7 @@ test_c_swsp:
 .endm
 
 .macro T_LDSP_OFF off, name
+    TEST_BEGIN \name
     LIX     t0, 0x1122334455667788
     sd      t0, \off(sp)
     .option rvc
@@ -731,6 +757,7 @@ test_c_swsp:
 .endm
 
 .macro T_LDSP_VAL val, name
+    TEST_BEGIN \name
     LIX     t0, \val
     REG_S   t0, 0(sp)
     .option rvc
@@ -781,6 +808,7 @@ test_c_ldsp:
     T_LDSP_VAL 0x0000000000000001, str_ldsp_val_one
 
     /* --- invariant: C.LDSP must not modify sp itself (pure read) --- */
+    TEST_BEGIN str_ldsp_sp_preserved
     mv      t3, sp
     .option rvc
     c.ldsp  t1, 0(sp)
@@ -802,6 +830,7 @@ test_c_ldsp:
  * ======================================================================= */
 
 .macro T_SDSP_RS2 rs2reg, name
+    TEST_BEGIN \name
     LIX     \rs2reg, 0x1122334455667788
     .option rvc
     c.sdsp  \rs2reg, 0(sp)
@@ -814,6 +843,7 @@ test_c_ldsp:
 .endm
 
 .macro T_SDSP_OFF off, name
+    TEST_BEGIN \name
     LIX     t1, 0x1122334455667788
     .option rvc
     c.sdsp  t1, \off(sp)
@@ -826,6 +856,7 @@ test_c_ldsp:
 .endm
 
 .macro T_SDSP_VAL val, name
+    TEST_BEGIN \name
     LIX     t1, \val
     .option rvc
     c.sdsp  t1, 0(sp)
@@ -854,6 +885,7 @@ test_c_sdsp:
     T_SDSP_RS2 t6,  str_sdsp_rs2_t6
 
     /* --- rs2=x0: storing the always-zero register --- */
+    TEST_BEGIN str_sdsp_rs2_x0
     LIXT    t0, 0xdeadbeefdeadbeef
     REG_S   t0, 0(sp)
     .option rvc
@@ -887,6 +919,7 @@ test_c_sdsp:
     T_SDSP_VAL 0x0000000000000001, str_sdsp_val_one
 
     /* --- invariant: C.SDSP must not modify sp itself --- */
+    TEST_BEGIN str_sdsp_sp_preserved
     mv      t3, sp
     LIX     t1, 0x1122334455667788
     .option rvc
@@ -923,6 +956,7 @@ test_c_sdsp:
  *      handler) advanced by exactly the same amount
  * ======================================================================= */
 test_c_ebreak:
+    TEST_BEGIN str_ebreak_caught
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -940,6 +974,7 @@ test_c_ebreak:
     call    check
 
     /* --- mcause reports exactly 3 (breakpoint) --- */
+    TEST_BEGIN str_ebreak_mcause
     la      t0, ebreak_mcause
     lw      t1, 0(t0)
     la      a0, str_ebreak_mcause
@@ -948,6 +983,7 @@ test_c_ebreak:
     call    check
 
     /* --- mepc lands exactly on the C.EBREAK instruction that faulted --- */
+    TEST_BEGIN str_ebreak_mepc
 .Lebreak_pc_marker:
     .option rvc
     c.ebreak
@@ -960,6 +996,7 @@ test_c_ebreak:
     call    check
 
     /* --- registers uninvolved in the trap survive the round-trip --- */
+    TEST_BEGIN str_ebreak_regs_s0
     LIXT    s0, 0x1111111111111111
     LIXT    s1, 0x2222222222222222
     LIXT    s3, 0x3333333333333333
@@ -970,15 +1007,18 @@ test_c_ebreak:
     LIXT    a1, 0x1111111111111111
     mv      a2, s0
     call    check
+    TEST_BEGIN str_ebreak_regs_s1
     la      a0, str_ebreak_regs_s1
     LIXT    a1, 0x2222222222222222
     mv      a2, s1
     call    check
+    TEST_BEGIN str_ebreak_regs_s3
     la      a0, str_ebreak_regs_s3
     LIXT    a1, 0x3333333333333333
     mv      a2, s3
     call    check
 
+    TEST_BEGIN str_ebreak_resume_count
     /* --- three EBREAKs in a row, each must fire and resume exactly
      *     once, both from this test's own point of view (a local
      *     counter bumped after each one) and from the trap handler's
@@ -1003,6 +1043,7 @@ test_c_ebreak:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN str_ebreak_hit_delta
     la      t0, ebreak_hit_count
     lw      t3, 0(t0)
     sub     t3, t3, t2              /* delta since baseline */
@@ -1023,6 +1064,7 @@ test_c_ebreak:
  * test, and s4 survives check() calls (check() only ever touches
  * t0-t6/a0-a2, plus explicitly saves/restores s0/s1). */
 .macro T_JR_REG reg, name
+    TEST_BEGIN \name
     LIX     s4, 0
     la      \reg, 1f
     .option rvc
@@ -1060,6 +1102,7 @@ test_c_jr:
     T_JR_REG s10, str_jr_reg_s10
     T_JR_REG t6,  str_jr_reg_t6
 
+    TEST_BEGIN str_jr_rs1_preserved
     /* --- invariant: rs1 itself is unmodified (pure read of the
      *     target address, no write-back) --- */
     la      t1, 1f
@@ -1074,6 +1117,7 @@ test_c_jr:
     mv      a2, t1
     call    check
 
+    TEST_BEGIN str_jr_no_link
     /* --- invariant: C.JR does NOT link -- ra must be untouched when
      *     jumping via a different register. This is the one property
      *     that actually separates C.JR from C.JALR. --- */
@@ -1106,6 +1150,7 @@ test_c_jr:
  * into s5 (not a t-register) since it must survive across two check()
  * calls, and check() clobbers t0-t6. */
 .macro T_JALR_REG reg, name_landed, name_link
+    TEST_BEGIN \name_landed
     LIX     s4, 0
     la      \reg, 1f
     .option rvc
@@ -1120,6 +1165,7 @@ test_c_jr:
     mv      a2, s4
     call    check
 
+    TEST_BEGIN \name_link
     la      a0, \name_link
     la      a1, .Ljalr_retaddr\@
     mv      a2, s5
@@ -1150,6 +1196,7 @@ test_c_jalr:
     T_JALR_REG s10, str_jalr_landed_s10, str_jalr_link_s10
     T_JALR_REG t6,  str_jalr_landed_t6,  str_jalr_link_t6
 
+    TEST_BEGIN str_jalr_rs1_preserved
     /* --- invariant: when rs1 != ra, rs1 itself is unmodified (only
      *     rd=ra is written; rs1 is purely read for the jump target) --- */
     la      t1, 1f
@@ -1172,7 +1219,7 @@ test_c_jalr:
  *  QUADRANT 2 : C.SLLI, C.LWSP, C.LDSP, C.JR, C.MV, C.EBREAK, C.JALR,
  *               C.ADD, C.SWSP, C.SDSP
  * ======================================================================= */
-tests_quadrant2:
+tests_c_quadrant2:
     addi    sp, sp, -80          /* JR/JALR/EBREAK below don't need much stack;
                                    * the *WSP/*SP tests allocate their own much
                                    * larger frames internally (see test_c_lwsp
@@ -1211,13 +1258,13 @@ tests_quadrant2:
     /* --- C.EBREAK: see test_c_ebreak --- */
     jal     ra, test_c_ebreak
 
-    jal     ra, bitx_quadrant2
+    jal     ra, bitx_c_quadrant2
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 80
     ret
 
-bitx_quadrant2:
+bitx_c_quadrant2:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 

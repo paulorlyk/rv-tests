@@ -1,8 +1,8 @@
 /* =====================================================================
- * base/lui.S  --  RV64I base-ISA LUI (load upper immediate)
+ * i/lui.S  --  RV64I base-ISA LUI (load upper immediate)
  *
- * Part of the RV64I base-ISA suite; see base/tests.S for how this
- * plugs into the rest (main_tests.S -> base/tests.S -> here), and
+ * Part of the RV64I base-ISA suite; see i/tests.S for how this
+ * plugs into the rest (main_tests.S -> i/tests.S -> here), and
  * common.S for the boot/UART/reporting harness everything sits on
  * ("check", "uart_puts" are used from there; nothing else).
  *
@@ -27,18 +27,19 @@
  * C.LUI/C.LI in the RVC suite -- LUI must fully replace rd, not
  * combine with whatever was there before.
  *
- * Bit independence across fields (bitx_base_lui, at the end): every bit
+ * Bit independence across fields (bitx_i_lui, at the end): every bit
  * pair among rd and the 20-bit immediate set together, C(25,2) = 300
  * cases. See bitx.inc.
  * ===================================================================== */
 
     .include "xlen.inc"
+    .include "harness.inc"
 
-    .option norvc            /* mandatory, not stylistic -- see base/loads.S */
+    .option norvc            /* mandatory, not stylistic -- see i/loads.S */
 
     .include "bitx.inc"
 
-    .global tests_base_lui
+    .global tests_i_lui
 
     .section .text
 
@@ -60,6 +61,7 @@
  * rd across a representative sample. rdreg may be a0/a1/a2 -- result
  * captured to t2 before those get reused. */
 .macro T_LUI_REG rdreg, name
+    TEST_BEGIN \name
     LIXT    \rdreg, 0xdeadbeefdeadbeef
     lui     \rdreg, 0x15
     mv      t2, \rdreg
@@ -71,6 +73,7 @@
 
 /* T_LUI_VAL imm20, expect, name -- fixed rd=t1, sweep the immediate. */
 .macro T_LUI_VAL imm20, expect, name
+    TEST_BEGIN \name
     LIXT    t1, 0xdeadbeefdeadbeef
     lui     t1, \imm20
     la      a0, \name
@@ -79,7 +82,7 @@
     call    check
 .endm
 
-tests_base_lui:
+tests_i_lui:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
@@ -92,12 +95,14 @@ tests_base_lui:
     T_LUI_REG t6,  str_lui_rd_t6
 
     /* --- rd=x0: must not fault, x0 must still read as 0 --- */
+    TEST_BEGIN str_lui_rd_x0
     lui     zero, 0x15
     la      a0, str_lui_rd_x0
     LIX     a1, 0
     mv      a2, zero
     call    check
 
+    TEST_BEGIN str_lui_rd_sp
     /* --- rd=sp: the one case that actually distinguishes LUI from
      *     C.LUI. Isolated so sp never holds a non-stack value across
      *     any call -- restore it before touching check(). --- */
@@ -121,13 +126,13 @@ tests_base_lui:
     T_LUI_VAL 0xaaaaa, 0xffffffffaaaaa000, str_lui_imm_alt1
     T_LUI_VAL 0x55555, 0x0000000055555000, str_lui_imm_alt0
 
-    jal     ra, bitx_base_lui
+    jal     ra, bitx_i_lui
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
     ret
 
-bitx_base_lui:
+bitx_i_lui:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 

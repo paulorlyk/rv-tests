@@ -3,9 +3,13 @@
 A bare-metal, M-mode RISC-V test firmware that exercises RV64 and RV32
 instructions and reports OK/FAIL for each case over an ns16550a
 serial port. The same sources build two images, one for RV64IMAC and one
-for RV32IMAC (see "RV64 and RV32" below). Three instruction-set suites
+for RV32IMAC (see "RV64 and RV32" below). Nine instruction-set suites
 are included so far — the C (compressed) extension, the I base ISA,
-and the M (integer multiply/divide) extension — sharing one common
+the M (integer multiply/divide) extension, the A extension's atomic
+memory operations, the Zicsr CSR instructions, the Zifencei
+instruction-fetch fence, the Zicboz cache-block zero, the Zabha byte
+and halfword atomic memory operations and the privileged
+architecture's `MRET`/`WFI` — sharing one common
 boot/UART/reporting harness and one running pass/fail total.
 
 ## Architecture
@@ -15,25 +19,52 @@ to it.
 
 - **`common.S`** — the reusable harness. Knows nothing about what's
   being tested. Provides: the reset vector / M-mode entry at
-  `0x80000000`, `gp`/`sp`/`mtvec` setup, a minimal trap handler
-  (expects only `EBREAK`, reports and hangs on anything else), the
+  `0x80000000`, `gp`/`sp`/`mtvec` setup (and a PMP entry that lets
+  U-mode reach all memory), a probe of `FENCE.I` at reset, a minimal
+  trap handler on a private stack (expects only `C.EBREAK` and reports
+  and hangs on anything else, unless a test has armed it — see "Traps
+  on purpose" below), the
   ns16550a UART driver (115200 8N1 init, `putc`/`puts`, hex/decimal
-  printing), the `check` pass/fail comparator (prints a verdict and
-  tracks running `pass_count`/`fail_count` totals), and the final
-  summary/halt. It calls a single symbol, `run_tests`, and otherwise
+  printing), `test_begin`, which prints a test's name before the test
+  runs, the `check` pass/fail comparator (prints a verdict and
+  tracks running `pass_count`/`fail_count` totals, and records the
+  first 8 failures), `check_trap`, which reports a check whose
+  instruction trapped as a `FAIL` (see "Unimplemented instructions
+  fail, they don't hang" below), and the final summary/halt, which lists those
+  failures. It calls a single symbol, `run_tests`, and otherwise
   doesn't know or care how many suites exist or what they test.
 - **`main_tests.S`** — the top-level dispatcher. Defines `run_tests`
   and just calls each suite's own entry point in turn
-  (`run_rvc_tests`, `run_base_tests`, `run_m_tests`). This is the file you touch to
+  (`run_c_tests`, `run_i_tests`, `run_m_tests`, `run_a_tests`,
+  `run_zicsr_tests`, `run_zifencei_tests`, `run_zicboz_tests`,
+  `run_zabha_tests`, `run_priv_tests`). This is the file you touch to
   add a new suite (see "Adding another test suite" below).
-- **`rvc/tests.S`** + **`rvc/quadrant0/1/2.S`** — the RV64C suite. See
+- **`c/tests.S`** + **`c/quadrant0/1/2.S`** — the RV64C suite. See
   "The RVC suite" below.
-- **`base/tests.S`** + **`base/loads.S`** — the RV64I base-ISA suite.
+- **`i/tests.S`** + **`i/loads.S`** — the RV64I base-ISA suite.
   See "The base-ISA suite" below.
 - **`m/tests.S`** + **`m/mul.S`**/**`m/div.S`** — the RV64M suite. See
   "The M suite" below.
+- **`a/tests.S`** + **`a/amo.S`**/**`a/lrsc.S`** — the RV64A suite. See "The A
+  suite" below.
+- **`zicsr/tests.S`** + **`zicsr/reg.S`**/**`zicsr/imm.S`** — the Zicsr
+  suite. See "The Zicsr suite" below.
+- **`zifencei/tests.S`** + **`zifencei/fencei.S`** — the Zifencei
+  suite. See "The Zifencei suite" below.
+- **`zicboz/tests.S`** + **`zicboz/cbozero.S`** — the Zicboz suite. See
+  "The Zicboz suite" below.
+- **`zabha/tests.S`** + **`zabha/amo.S`** — the Zabha suite. See "The
+  Zabha suite" below.
+- **`priv/tests.S`** + **`priv/mret.S`**/**`priv/wfi.S`** — the
+  privileged-instruction suite. See "The privileged suite" below.
 - **`xlen.inc`** — the RV64/RV32 switch every file includes first; see
   "RV64 and RV32" below.
+- **`harness.inc`** — `TEST_BEGIN`, the test side of the name-first
+  reporting (see "Test names are printed first" below),
+  `TRAP_ARM`/`TRAP_DISARM`/`TRAP_DISARM_R`/`TRAP_LD`, the test side of
+  the armed trap mode (see "Traps on purpose" below),
+  `TRAP_REPORT`/`TRAP_FAILS`, which turn a trap into `FAIL`s, and
+  `SYNC_I`, a `FENCE.I` that is skipped on a hart without one.
 - **`bitx.inc`** + **`bitx.S`** — shared machinery for the
   bit-independence tests every instruction gets on top of its own
   per-field coverage. See "Bit independence across fields" below.
@@ -55,29 +86,176 @@ Current totals, all passing:
 
 | Image | Result lines | Per-instruction | Bit-independence | UART output (at 115200 baud) |
 |---|---|---|---|---|
-| RV64 (`build/rv64/`) | **13903** | 1945 | 11958 | ~529 KB, ~46 s |
-| RV32 (`build/rv32/`) | **10882** | 1479 | 9403 | ~415 KB, ~36 s |
+| RV64 (`build/rv64/`) | **26768** | 3188 | 23580 | ~1190 KB, ~103 s |
+| RV32 (`build/rv32/`) | **20705** | 2532 | 18173 | ~917 KB, ~80 s |
+
+(`AMOMIN`/`AMOMAX`/`AMOMINU`/`AMOMAXU` add 2348 lines on RV64, 2176 of
+them bitx, and 1168 on RV32, 1088 of them bitx. `LR`/`SC` add 927 lines
+on RV64, 808 of them bitx, and 494 on RV32, 404 of them bitx. `FENCE.I`
+adds 473 on each width, 462 of them bitx. The six Zicsr instructions add
+654 on each width, 540 of them bitx. `CBO.ZERO` adds 102 on each width,
+20 of them bitx. The 18 Zabha AMOs add 5377 on each width, 4896 of
+them bitx. `ECALL`/`EBREAK` add 44 on each width, `MRET` 20 and
+`WFI` 18, none of them bitx: those four have no variable field.)
 
 Under QEMU each run takes about a second.
 
+If any check failed, the summary also lists the first 8 failures, in
+the order they ran, with the values `check` compared, then how many more
+there were:
+
+```
+--- Summary: pass_count = 19041, fail_count = 2 ---
+Failed tests:
+  WFI in U-mode with TW=1: mcause == 2 (illegal instruction) - expected 0x0000000000000002, got 0x0000000000000008
+  WFI in U-mode with TW=1: mepc == the WFI itself - expected 0x00000000801d7de4, got 0x00000000801d7de8
+ONE OR MORE TESTS FAILED
+```
+
+A check whose instruction trapped (see "Unimplemented instructions
+fail, they don't hang") is listed with the trap instead:
+`  AMO rd=ra(x1) (via AMOADD.W) - trapped, mcause=0x0000000000000002, mepc=0x000000008016ed00`.
+
+`check` and `check_trap` record each failure (the name pointer, the two
+values and whether it was a trap) in
+`fail_log` in `common.S` while there's room; `FAIL_LOG_MAX` (8) sets the
+size. More failures are still counted, and the list ends with
+`  ... and N more`. The values are printed at register width, 16 hex
+digits on RV64 and 8 on RV32. The list header says `Failed`, not
+`FAIL`, so `grep -c FAIL` still counts one line per failure plus the
+final verdict line, and a passing run's output is unchanged.
+
 When the summary has been printed, the hart parks in a `WFI` loop.
+
+## Test names are printed first
+
+Every test announces itself before any of its code runs: `TEST_BEGIN
+str_x` (`harness.inc`) calls `test_begin` in `common.S`, which prints
+`"<name> - "` right away, and the `check` that reports the same name
+then adds only `OK`/`FAIL`. A passing run's output is unchanged, but a
+test that traps or hangs leaves its own name on the last line, directly
+before `!!! UNEXPECTED TRAP, mcause=...`, rather than the name of the
+test before it:
+
+```
+OP rd==rs1==rs2 (via ADD, doubles) - 
+!!! UNEXPECTED TRAP, mcause=0x0000000000000002
+```
+
+`TEST_BEGIN` is fully register-transparent (it saves `ra`/`a0` on the
+stack, and `test_begin` preserves everything else), so it sits at the
+top of each `T_*` macro and before each inline test's setup, above any
+PC-reference label and before `sp`/`gp` are touched. A test with
+several checks announces each one just before the code that computes
+it. The bitx cases are announced by `BX_ENTER` itself, using the name
+string their first `BX_REPORT` defines, so the case macros don't
+change. A `check` whose name was never announced still prints the full
+`"<name> - <verdict>"` line, so a missing `TEST_BEGIN` costs only the
+early announcement, never a result.
+
+## Traps on purpose
+
+Unarmed, `common.S`'s trap handler accepts only a breakpoint (the
+`C.EBREAK` tests; it steps over a 2-byte instruction) and treats
+anything else as `UNEXPECTED TRAP`. Tests that trap deliberately in any
+other way — `ECALL`, the 4-byte `EBREAK`, an instruction that is
+illegal in U-mode, an interrupt taken out of `WFI` — arm it first:
+`TRAP_ARM label` (`harness.inc`) stores a resume address in
+`trap_resume`. The next trap, of any cause and from any privilege mode,
+then records `mcause`, `mepc`, `mtval` and `mstatus` as they were on
+entry (`trap_mcause`/`trap_mepc`/`trap_mtval`/`trap_mstatus`, read back
+with `TRAP_LD`), bumps `trap_count`, disarms itself, and returns with
+`MRET` to `label` in M-mode (it sets `MPP` to M; for an interrupt it
+also clears `mie` so the source can't fire again at once). The test
+then checks the recorded cause itself, so a missing, wrong or extra
+trap is a `FAIL` rather than a hang. `TRAP_DISARM` clears an arming
+whose trap never came (`TRAP_DISARM_R reg` does the same without the
+stack, for where `sp` may still be swept).
+
+The handler runs on its own stack (`trap_stack` in `common.S`): on
+entry it parks `t0` in `mscratch`, saves the interrupted `sp` at the
+top of `trap_stack` and switches to it, and puts `sp` back on the way
+out. A bitx case may be sweeping `sp` as an operand (holding a pool
+value, or the address of the buffer under test) when its instruction
+traps, and a handler that pushed onto that `sp` would fault inside
+itself and loop forever. The cost is that every trap overwrites
+`mscratch`; no test keeps a value there across a trap (the Zicsr tests
+write it and read it back with nothing in between). The whole handler
+is `norelax`, since `gp` may be swept too.
+
+### Unimplemented instructions fail, they don't hang
+
+The instructions of the A, Zicboz, Zabha and Zifencei suites may simply be
+missing on a target, which raises an illegal-instruction trap (mcause
+2); a misdecoded address can also raise an access fault. So every
+instruction under test there runs armed. `TRAP_ARM` goes before it (or
+before the first of a group, e.g. an `LR`/`SC` pair: the arming is
+consumed only by a trap, so one covers the whole group, and no stack
+store lands between an `LR` and its `SC`), and a disarm after it.
+After the test's own checks, `TRAP_FAILS resume, name...` jumps over a
+resume path at `resume` that calls `check_trap` once for every check
+the test makes:
+
+```
+AMO rd=ra(x1) (via AMOADD.W) - FAIL (trap, mcause=0x0000000000000002, mepc=0x000000008016ed00)
+```
+
+So a trapping instruction costs one `FAIL` per check, and the number of
+result lines is the same as in a passing run. A test that sweeps
+`sp`/`gp`/`tp` puts them back at its resume label before reporting
+(`BX_TRAP_FAILS` in `bitx.inc` does it for the bitx cases, which name
+their strings up front with `BX_NAME`/`BX_REPORT_AT` so the resume path
+can report all of them). The unarmed handler is unchanged: a trap
+nobody armed for is still `UNEXPECTED TRAP`.
+
+`FENCE.I` is also test machinery: the bitx sled for the control-transfer
+instructions (`bitx.S`, `BX_PLANT`/`BX_GO`) synchronises instruction
+fetch with it. Reset runs one `FENCE.I` armed and sets `has_fencei`
+from the outcome; the machinery uses `SYNC_I`, which skips the
+`FENCE.I` when `has_fencei` is 0, and reset prints
+`FENCE.I not implemented (it traps): instruction-fetch sync skipped`.
+The Zifencei suite's own `FENCE.I`s are all armed, so there they fail.
+
+Checked under QEMU by switching each extension off; each run reaches its
+summary with unchanged totals, and the failures are exactly these
+(RV64 / RV32). QEMU leaves Zabha off unless asked, so every row except
+the Zabha one is run with `zabha=true` added, and plain `-cpu rv64` /
+`rv32` is the Zabha row:
+
+| `-cpu rv64,...` / `rv32,...` | `FAIL`s | where |
+|---|---|---|
+| `a=false,zawrs=false` | 6180 / 3138 | every A check, the two `CBO.ZERO`+`AMOADD.W` checks of the Zicboz suite, and the Zicsr `misa` check (QEMU keeps Zabha working without A, so the Zabha suite still passes) |
+| `zicboz=false` | 102 / 102 | the Zicboz suite |
+| `zabha=false` (the default) | 5377 / 5377 | the Zabha suite |
+| `zifencei=false` | 473 / 473 | the Zifencei suite (the C/I control-transfer bitx cases still pass: QEMU keeps instruction fetch coherent without `FENCE.I`) |
+| all of the above | 12130 / 9088 | the sum |
+
+For U-mode tests, `common.S`'s reset also programs PMP entry 0 as a
+NAPOT region over the whole address space with R/W/X, unlocked, so
+U-mode code can run in place (M-mode is unaffected). A hart without PMP
+needs no entry — U-mode then has full access — but may trap on the PMP
+CSRs instead of ignoring the writes (older cores; QEMU with
+`-cpu rv64,pmp=false`), so the two writes run with `mtvec` briefly
+pointing at `pmp_skip`, which steps over a write that traps. Both
+images pass unchanged with `pmp=false`.
 
 ## RV64 and RV32
 
 `make` builds both images from the same sources: `build/rv64/rvc_test.{elf,bin}`
-(`-march=rv64imac_zicsr_zifencei -mabi=lp64`) and `build/rv32/rvc_test.{elf,bin}`
-(`-march=rv32imac_zicsr_zifencei -mabi=ilp32`). Each file gets
+(`-march=rv64imac_zicsr_zifencei_zicboz_zabha -mabi=lp64`) and `build/rv32/rvc_test.{elf,bin}`
+(`-march=rv32imac_zicsr_zifencei_zicboz_zabha -mabi=ilp32`). Each file gets
 `--defsym XLEN=64` or `XLEN=32`, and everything width-dependent goes
 through `xlen.inc` or an explicit `.if XLEN == 64` block:
 
 - **Only on RV64** (guarded out of the RV32 image): `LD`, `SD`, `LWU`;
   `ADDIW`, `SLLIW`, `SRLIW`, `SRAIW`; `ADDW`, `SUBW`, `SLLW`, `SRLW`, `SRAW`;
-  `MULW`, `DIVW`, `DIVUW`, `REMW`, `REMUW`; `C.LD`, `C.SD`, `C.LDSP`,
+  `MULW`, `DIVW`, `DIVUW`, `REMW`, `REMUW`; the nine `AMO*.D`; `C.LD`, `C.SD`, `C.LDSP`,
   `C.SDSP` (on RV32C those encodings are the floating-point
   `C.FLW`/`C.FSW`/`C.FLWSP`/`C.FSWSP`, out of scope as before),
   `C.ADDIW`, `C.SUBW`, `C.ADDW`; and the few tests that are about bits
   above 31 themselves (e.g. "SW discards the upper 32 bits of rs2",
-  "SLTIU's immediate sign-extends to 64, not 32").
+  "SLTIU's immediate sign-extends to 64, not 32", "AMOADD.W ignores
+  rs2[63:32]").
 - **Only on RV32:** `C.JAL`, which reuses `C.ADDIW`'s encoding. It gets
   the same coverage as `C.J` — every offset bit forward and backward,
   with the same one-slot margin at the boundary — plus a check that
@@ -112,18 +290,18 @@ files:
 
 | File | Instructions |
 |---|---|
-| `rvc/tests.S` | orchestrator; defines `run_rvc_tests`, prints the banner, calls each quadrant in turn |
-| `rvc/quadrant0.S` | `C.ADDI4SPN`, `C.LW`, `C.LD`, `C.SW`, `C.SD` |
-| `rvc/quadrant1.S` | `C.NOP`, `C.ADDI`, `C.ADDIW`, `C.LI`, `C.ADDI16SP`, `C.LUI`, `C.SRLI`, `C.SRAI`, `C.ANDI`, `C.SUB`, `C.XOR`, `C.OR`, `C.AND`, `C.SUBW`, `C.ADDW`, `C.J`, `C.BEQZ`, `C.BNEZ` |
-| `rvc/quadrant2.S` | `C.SLLI`, `C.LWSP`, `C.LDSP`, `C.JR`, `C.MV`, `C.EBREAK`, `C.JALR`, `C.ADD`, `C.SWSP`, `C.SDSP` |
+| `c/tests.S` | orchestrator; defines `run_c_tests`, prints the banner, calls each quadrant in turn |
+| `c/quadrant0.S` | `C.ADDI4SPN`, `C.LW`, `C.LD`, `C.SW`, `C.SD` |
+| `c/quadrant1.S` | `C.NOP`, `C.ADDI`, `C.ADDIW`, `C.LI`, `C.ADDI16SP`, `C.LUI`, `C.SRLI`, `C.SRAI`, `C.ANDI`, `C.SUB`, `C.XOR`, `C.OR`, `C.AND`, `C.SUBW`, `C.ADDW`, `C.J`, `C.BEQZ`, `C.BNEZ` |
+| `c/quadrant2.S` | `C.SLLI`, `C.LWSP`, `C.LDSP`, `C.JR`, `C.MV`, `C.EBREAK`, `C.JALR`, `C.ADD`, `C.SWSP`, `C.SDSP` |
 
 The quadrant grouping matches the RVC spec's own opcode layout (bits
 `[1:0]` of the 16-bit instruction select the quadrant). Each quadrant
-file exposes exactly one symbol, `tests_quadrantN`, to the outside —
+file exposes exactly one symbol, `tests_c_quadrantN`, to the outside —
 its macros and per-instruction `test_c_*` subroutines stay local. All
 three only depend on `check`/`uart_puts` from `common.S` (plus
-`word_buf`, defined in `rvc/quadrant0.S` and used by one test in
-`rvc/quadrant1.S` — the one cross-quadrant reference in the suite).
+`word_buf`, defined in `c/quadrant0.S` and used by one test in
+`c/quadrant1.S` — the one cross-quadrant reference in the suite).
 
 **Not covered:** `C.FLD`/`C.FSD`/`C.FLDSP`/`C.FSDSP` (require the `D`
 floating-point extension) and `C.FLW`/`C.FSW` (RV32FC-only, don't
@@ -168,7 +346,7 @@ Every instruction gets comprehensive, edge-case-driven coverage:
   guaranteed to exercise a two-bit coupling). This is the general
   defense against "any bit of any variable part of the instruction can
   be corrupt [and only show up in combination with some other bit]" --
-  see `test_c_addi4spn`'s header comment in `rvc/quadrant0.S` for the
+  see `test_c_addi4spn`'s header comment in `c/quadrant0.S` for the
   full reasoning. Every other instruction in every suite now gets the
   generalised form of this — see "Bit independence across fields"
   below.
@@ -208,17 +386,18 @@ chosen registers/immediate don't fit the format.
 ## The base-ISA suite
 
 RV64I's load and store instructions:
-- **`base/loads.S`**: `LB`, `LH`, `LW`, `LD`, `LBU`, `LHU`, `LWU`
-- **`base/stores.S`**: `SB`, `SH`, `SW`, `SD`
-- **`base/lui.S`**: `LUI`
-- **`base/auipc.S`**: `AUIPC`
-- **`base/jal.S`**: `JAL`
-- **`base/jalr.S`**: `JALR`
-- **`base/branches.S`**: `BEQ`, `BNE`, `BLT`, `BGE`, `BLTU`, `BGEU`
-- **`base/op_alu.S`**: `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`, `SRL`, `SRA`, `OR`, `AND`
-- **`base/op_imm.S`**: `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`, `ANDI`, `SLLI`, `SRLI`, `SRAI`
-- **`base/op_imm32.S`**: `ADDIW`, `SLLIW`, `SRLIW`, `SRAIW` (RV64 only)
-- **`base/op_alu32.S`**: `ADDW`, `SUBW`, `SLLW`, `SRLW`, `SRAW` (RV64 only)
+- **`i/loads.S`**: `LB`, `LH`, `LW`, `LD`, `LBU`, `LHU`, `LWU`
+- **`i/stores.S`**: `SB`, `SH`, `SW`, `SD`
+- **`i/lui.S`**: `LUI`
+- **`i/auipc.S`**: `AUIPC`
+- **`i/jal.S`**: `JAL`
+- **`i/jalr.S`**: `JALR`
+- **`i/branches.S`**: `BEQ`, `BNE`, `BLT`, `BGE`, `BLTU`, `BGEU`
+- **`i/op_alu.S`**: `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`, `SRL`, `SRA`, `OR`, `AND`
+- **`i/op_imm.S`**: `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`, `ANDI`, `SLLI`, `SRLI`, `SRAI`
+- **`i/op_imm32.S`**: `ADDIW`, `SLLIW`, `SRLIW`, `SRAIW` (RV64 only)
+- **`i/op_alu32.S`**: `ADDW`, `SUBW`, `SLLW`, `SRLW`, `SRAW` (RV64 only)
+- **`i/system.S`**: `ECALL`, `EBREAK`
 
 Base-ISA instructions have a genuinely different risk profile than
 RVC ones, which shapes the coverage differently:
@@ -363,7 +542,7 @@ RVC ones, which shapes the coverage differently:
   against `x0` with an `x8`-`x15` register would otherwise be
   substituted with `C.BEQZ`/`C.BNEZ` — verified by disassembly that
   zero compressed forms leaked in.
-- **`base/op_alu.S`'s ten R-type ALU instructions share one encoding**
+- **`i/op_alu.S`'s ten R-type ALU instructions share one encoding**
   and differ only in the operation, so — the same idea as the branch
   file — the register fields (`rd`/`rs1`/`rs2` and every aliasing
   combination) are swept *once*, through `ADD`, rather than ten times
@@ -376,8 +555,8 @@ RVC ones, which shapes the coverage differently:
   reason. `.option norvc` matters here too — several of these have
   direct compressed equivalents among `x8`-`x15` registers that the
   assembler would otherwise substitute.
-- **`base/op_imm.S`'s nine OP-IMM instructions** follow the same
-  pattern as `base/op_alu.S`: `rd`/`rs1` (plus `rd==rs1`, `rd=x0` and
+- **`i/op_imm.S`'s nine OP-IMM instructions** follow the same
+  pattern as `i/op_alu.S`: `rd`/`rs1` (plus `rd==rs1`, `rd=x0` and
   `rs1=x0`) are swept once, through `ADDI`. Most of the depth goes into
   the immediate. It is **sign-extended to 64 bits before the
   operation for all six non-shift ops**, including the logical ops and
@@ -396,7 +575,7 @@ RVC ones, which shapes the coverage differently:
   pairs. `.option norvc` is load-bearing here: most of these have
   compressed forms (`c.addi`, `c.li`, `c.andi`, `c.slli`, `c.srli`,
   `c.srai`, …). Disassembly confirmed that no compressed forms leaked in.
-- **`base/op_imm32.S`'s four OP-IMM-32 instructions** (RV64 only; on
+- **`i/op_imm32.S`'s four OP-IMM-32 instructions** (RV64 only; on
   RV32 the entry point is an empty stub) operate on the low 32 bits of
   `rs1` and **sign-extend the 32-bit result from bit 31**. The tests are
   chosen so that the 64-bit twin would give a different answer. Sources
@@ -416,7 +595,7 @@ RVC ones, which shapes the coverage differently:
   `c.addiw`. The bit-independence references are assemble-time
   constants computed from the pool value, not the OP-32 twins, so the
   two files check each other rather than sharing a reference.
-- **`base/op_alu32.S`'s five OP-32 instructions** (RV64 only; on RV32
+- **`i/op_alu32.S`'s five OP-32 instructions** (RV64 only; on RV32
   the entry point is an empty stub) are the register-register twins of
   the above, with the same rules: only the low 32 bits of each source
   count, and the 32-bit result is sign-extended from bit 31. `ADDW` and
@@ -433,7 +612,21 @@ RVC ones, which shapes the coverage differently:
   case (reference = the same instruction in the `t2`/`t3`/`t4`
   encoding). The shift pool value has `rs2[5]` set, so a shift that
   honours it gets a different amount.
-
+- **`i/system.S`** (`ECALL`, `EBREAK`): each has exactly one encoding,
+  so there is no operand to sweep, and every trap goes through the
+  armed handler (see "Traps on purpose"). For each instruction: it
+  traps exactly once and execution comes back where the handler sends
+  it; `mcause` is 11 (`ECALL` from M-mode) or 3 (`EBREAK`); `mepc` is the
+  instruction itself, not the next one; `mtval` is 0 (`ECALL`), or 0 or
+  the instruction's address (`EBREAK`, either is allowed); on entry
+  `MPP` = 3, `MIE` = 0 and `MPIE` = the previous `MIE`, run with `MIE`
+  both 0 and 1 (with `mie` = 0), and `MIE` is back after the `MRET`;
+  `a0`–`a7`, `t2`–`t6` and `s6`–`s11` survive; three in a row each
+  trap once; at an address that is 2 mod 4 `mepc` is still exact; and
+  from U-mode (entered with `MRET`) `ECALL`'s cause becomes 8 while
+  `EBREAK`'s stays 3, with `MPP` = 0 recorded (an `mscratch` read after
+  the instruction traps back to M-mode if it doesn't). `.option norvc` also
+  keeps `ebreak` from being assembled as `c.ebreak`.
 Every mnemonic in this suite is written with `.option norvc` active
 for the entire file — not just style, but a functional requirement:
 without it, the assembler would happily substitute a compressed
@@ -449,14 +642,14 @@ extend it further: a macro that sweeps register X while using a fixed
 *other* register Y as scratch is broken if Y ever appears as one of
 the values X is swept across.
 
-- In `base/loads.S`'s `*_RS1` macro family (sweeps the base register
+- In `i/loads.S`'s `*_RS1` macro family (sweeps the base register
   while storing a fixed test value first), the scratch value register
   was originally `t0` — but `t0` is also one of the swept `basereg`
   candidates. When `basereg == t0`, loading the test value into `t0`
   destroyed the address just computed there, and the store faulted
   (`mcause 7`, store/AMO access fault). Fixed by moving the scratch to
   `t1` (not in the sweep list).
-- In `base/stores.S`'s `*_RS2` macro family (sweeps the value register
+- In `i/stores.S`'s `*_RS2` macro family (sweeps the value register
   while using a fixed base address), the fixed base was originally
   `s0` — but `s0` is also one of the swept `rs2reg` candidates. Same
   fault, same fix shape: moved the fixed base to `s1` (not in the
@@ -477,7 +670,7 @@ split across two files:
 - **`m/mul.S`**: `MUL`, `MULH`, `MULHSU`, `MULHU`, `MULW`
 - **`m/div.S`**: `DIV`, `DIVU`, `REM`, `REMU`, `DIVW`, `DIVUW`, `REMW`, `REMUW`
 
-They all use the same R-type encoding as `base/op_alu.S` (`funct7=0000001`),
+They all use the same R-type encoding as `i/op_alu.S` (`funct7=0000001`),
 so the same idea applies: `rd`/`rs1`/`rs2` and every aliasing combination
 are swept once, through `MUL`, and each instruction gets its own
 arithmetic coverage:
@@ -507,6 +700,336 @@ arithmetic coverage:
   `DIVU`+`REMU` on the same sources) are tested as pairs, along with
   the identity `q*d + r == dividend`.
 
+## The A suite
+
+The atomic memory operations of RV64A: all 18 AMOs (the RV32 image: the
+9 `.W` forms), in **`a/amo.S`**: `AMOSWAP`, `AMOADD`, `AMOXOR`,
+`AMOAND`, `AMOOR`, `AMOMIN`, `AMOMAX`, `AMOMINU`, `AMOMAXU`, each as
+`.W` and `.D`; and `LR`/`SC` (`.W` and `.D`) in **`a/lrsc.S`**, below.
+
+An AMO returns the *old* memory value in `rd` and writes
+`op(old, rs2)` back to the address in `rs1`, so every value test checks
+two results: `rd` and the memory word/doubleword. They all share one
+encoding (`funct5` picks the operation, `funct3` the width, plus the
+`aq`/`rl` bits), so `rd`/`rs1`/`rs2` and the aliasing combinations are
+swept once, through `AMOADD.W`, and each instruction gets its own
+value coverage:
+
+- **Old value vs. new value.** Each instruction's first case (and most
+  others) has an old value and a result that differ, so returning the
+  new value, or swapping `rd` and memory, fails.
+- **`.W` sign-extends the old word into `rd`** (old words with bit 31
+  set), and **writes exactly 4 bytes**: after every instruction, at
+  both word offsets of a doubleword, the words just below and above
+  the target are checked. The `rs2` in those cases is chosen per
+  operation so that the same operation done 64 bits wide would change
+  the neighbouring word (e.g. `AMOADD.W`'s carry out of bit 31). `.D`
+  gets the same neighbour check.
+- **The same operand pairs for `MIN`/`MAX`/`MINU`/`MAXU`**, where the
+  signed and unsigned readings diverge (`(1, -1)`, `(INT_MIN, INT_MAX)`
+  in both orders), so a swapped signed/unsigned or min/max decode fails
+  visibly, and the result comes from memory in one order and from
+  `rs2` in the other.
+- **Width of the compare.** On RV64 the `.W` forms get garbage in
+  `rs2[63:32]` (must be ignored), and `0x80000000` loaded with its upper
+  half zero must still compare as negative. The `.D` forms get pairs
+  like `(2^32, 1)` and `(0xffffffff, 0)` that a 32-bit compare gets wrong.
+- **`rd=x0`** still updates memory. **`rs2=x0`**: `AMOSWAP` stores 0,
+  and `AMOOR` returns the old value and leaves memory alone (the atomic
+  load idiom).
+- **Aliasing**: `rd==rs2` (`AMOSWAP` swaps a register with memory),
+  `rd==rs1` (the address must be read before `rd` is written),
+  `rs1==rs2` (the address is the operand), `rd==rs1==rs2`, and `rs1=sp`.
+  Sources are checked unmodified.
+- **`aq`/`rl`** must not change the result: every instruction also runs
+  as `.aq`, `.rl` and `.aqrl`. The ordering itself can't be observed on
+  a single hart and isn't tested.
+
+Every AMO under test runs armed, so a missing or trapping one gives a
+`FAIL` per check (see "Unimplemented instructions fail, they don't
+hang"). Misaligned AMOs (which must trap) are not tested.
+
+**`a/lrsc.S`** covers `LR.W`/`SC.W` and (RV64) `LR.D`/`SC.D`. `LR` loads
+(`.W` sign-extended) and registers a reservation; `SC` stores `rs2` only
+while that reservation holds, and returns 0 in `rd` on success, nonzero
+on failure. Either way it drops the reservation:
+
+- **Values and width**: `LR`'s `rd` (sign extension for `.W`, none from
+  bit 31 for `.D`), `SC`'s `rd` and the stored value at both word
+  offsets of a doubleword, and on RV64 an `SC.W` whose `rs2` has garbage
+  above bit 31. `LR` leaves the target and its neighbours alone; `SC`
+  writes exactly its width.
+- **The failure rules the spec requires**: a second `SC` after one `LR`
+  fails, an `SC` outside the reservation fails, an `SC` right after a
+  failed one fails too, and an `SC` to an earlier `LR`'s address fails
+  once a later `LR` has reserved somewhere else (the `SC` to the later
+  address succeeds). A failed `SC` stores nothing. Failure is checked as
+  `rd != 0`, since the spec only requires "nonzero".
+- **`rd=x0`** for `SC` still stores. The standard retry loop (an atomic
+  increment, `SC` with `rd==rs2`) runs three times.
+- **Register fields** swept through `LR.W`/`SC.W`, and **aliasing**:
+  `LR` `rd==rs1` (its reservation must be on the address it read), `SC`
+  `rd==rs2`, `rd==rs1`, `rs1==rs2` (stores its own address),
+  `rd==rs1==rs2`, `rs1=sp`, and sources unmodified.
+- **`aq`/`rl`** on either side of a pair must not change the result.
+
+Two assumptions go beyond what the spec strictly promises. First, an
+`LR` followed directly by its `SC` (with only ALU instructions between
+them, the spec's "constrained" shape) succeeds on the first try on a
+single hart. The spec allows an `SC` to fail spuriously, but none of
+these cases gives a single-hart implementation a reason to. Second, the
+reservation set is smaller than 4 KiB: the "other address" is 4096
+bytes away. Some cases are left out because the spec leaves their
+outcome open: mixed-width pairs, a plain store by the same hart between
+`LR` and `SC`, and whether a trap drops the reservation. Every `LR`/`SC`
+group runs armed, with one arming across the group so nothing is stored
+between `LR` and `SC`: a missing or trapping one gives a `FAIL` per
+check.
+
+## The Zicsr suite
+
+The six CSR instructions of Zicsr, identical on both widths:
+- **`zicsr/reg.S`**: `CSRRW`, `CSRRS`, `CSRRC`
+- **`zicsr/imm.S`**: `CSRRWI`, `CSRRSI`, `CSRRCI`
+
+Each reads the old CSR value into `rd` and writes a new one: `rs1` (or
+the uimm), `old | rs1`, or `old & ~rs1`. So every value test checks
+two results, `rd` and the CSR. The CSR under test is `mscratch`: it is
+the one M-mode CSR the spec makes fully read/write at XLEN bits with no
+side effects, and nothing else in the firmware uses it.
+
+- **`rd` is the old value, the CSR gets the new one**, with full-width
+  patterns, all ones and zero, and the top bit set or cleared alone.
+  `CSRRS`/`CSRRC` whose (non-`x0`) `rs1` holds 0 leave the CSR unchanged.
+- **Register fields** are swept once, through `CSRRW` (`rd`, `rs1`), plus
+  `rd=x0` for each instruction (the write still happens) and `rs1=x0`
+  (`CSRRW` writes 0, `CSRRS`/`CSRRC` write nothing). `rd==rs1` for each:
+  `rs1` must be read before `rd` is written. `rs1` is left unmodified.
+- **The uimm is zero-extended and is not a register.** Every uimm bit is
+  walked for each immediate form, plus 0 and 31: `CSRRWI 31` writes
+  `0x1f`, and `CSRRSI`/`CSRRCI 31` change only the low five bits of an
+  old value whose upper bits would show a sign extension. Each also runs
+  with the register numbered uimm holding a value that would give a
+  different answer if it were read instead.
+- **Back-to-back**: a CSR access in the very next instruction sees the
+  write before it (`CSRRW`/`CSRRW`, `CSRRS`/`CSRRC`), and the `rd` of a CSR
+  instruction is usable in the next one.
+- **The csr field**: `mscratch` (0x340) and `mepc` (0x341) differ only in
+  bit 0, and each keeps its own value when the other is written. `misa`
+  reports MXL = XLEN and the I, M, A and C extensions.
+- **No write means no trap.** `CSRRS`/`CSRRC` with `rs1=x0` and
+  `CSRRSI`/`CSRRCI` with uimm 0 read the read-only `mhartid`,
+  `mvendorid`, `marchid` and `mimpid` and must agree with each other.
+  If one of them attempted a write, the illegal-instruction exception
+  would hang the run with `UNEXPECTED TRAP`.
+
+Not tested: anything that has to trap (writing a read-only CSR, or
+`CSRRS`/`CSRRC` with a non-`x0` `rs1` register holding 0 on one), since
+`common.S`'s handler only expects `EBREAK`; and `mepc[0]` reading as 0.
+QEMU 10.0 keeps that bit as written and clears it only on `MRET`.
+
+For bit independence the variable fields are `rd` and `rs1`/uimm, 45
+cases per instruction, each checking `rd` and `mscratch` against
+assemble-time constants. The 12-bit csr field is held at `mscratch`
+like an opcode: setting two arbitrary bits of it names a different,
+mostly nonexistent CSR, which would trap. Because uimm bits are data
+bits, the old value differs per instruction: `CSRRSI`'s has the low
+five bits clear and `CSRRCI`'s has them set, so every set or clear is
+visible.
+
+## The Zifencei suite
+
+Zifencei is a single instruction, `FENCE.I`, but it is its own extension
+rather than part of RV64I/RV32I, so like every extension it has its own
+suite directory. Identical on both widths:
+- **`zifencei/fencei.S`**: `FENCE.I`
+
+`FENCE.I` can only be tested with self-modifying code: write an
+instruction, `FENCE.I`, execute it, and check that the new instruction
+ran and not a stale copy. Every rewritten location has run with its old
+contents first, so a stale copy exists. The tested routine is `addi t6, zero, K` plus a return,
+copied from assembled templates, and the checks cover:
+- a buffer in `.bss`, rewritten four times in a row;
+- the new instruction written with byte stores, and a compressed
+  `c.li`/`c.jr` pair written with halfword stores;
+- the instruction immediately after a `FENCE.I` inside the code being
+  modified (the buffer stores into its own next-but-one slot, fences,
+  and runs into it);
+- a routine in `.text` patched in place and patched back;
+- no register side effects.
+
+The spec reserves the `rd`, `rs1` and `imm` fields for finer-grained
+fences and says implementations must ignore them, so all 22 of those
+bits are the variable fields for bit independence (background: the
+all-zero standard encoding, generated with `.insn`). Each of the 231
+cases must still fence and must leave `rd` unchanged. Under QEMU,
+self-modifying code is detected even without a fence, so these tests
+only become a real check of the fence on hardware with an instruction
+cache. The tests also assume that `.text` and `.bss` are writable and
+executable from M-mode. Every `FENCE.I` here runs armed, including the
+one in `FI_BUF_INIT` and the one inside the buffer of the "next
+instruction" test. Without Zifencei, or if a hart traps on the reserved
+fields the spec says it must ignore, each affected check is a `FAIL`
+(the in-place `.text` patch is undone on the way out).
+
+## The Zicboz suite
+
+Zicboz is a single instruction, `CBO.ZERO`, and like every extension it
+has its own suite directory. Identical on both widths:
+- **`zicboz/cbozero.S`**: `CBO.ZERO`
+
+`CBO.ZERO rs1` stores zeros to the whole cache block containing the
+address in `rs1`: the address is aligned down to the block size, and
+nothing outside the block is written. It has no offset and no `rd`. The
+block size can't be read from M-mode, so it is the assemble-time
+constant `CBOZ_BLOCK_BYTES` in `zicboz/cbozero.S` (64, QEMU's default;
+see "Porting").
+
+Every test fills a four-block, block-aligned buffer with a pattern that
+has no zero byte, runs `CBO.ZERO` on the second or third block, and
+scans the buffer. The scan reports the first and last byte that changed
+and how many bytes in between are not zero, as one value, so a block of
+the wrong size or alignment, a zero that starts at the address instead
+of the block start, a touched neighbour or a missed byte all fail. The
+checks cover:
+- the zeroed extent is exactly `CBOZ_BLOCK_BYTES`, and an aligned
+  address zeroes exactly its own block;
+- unaligned addresses: each address bit below the block size set on
+  its own, the last byte of a block, the middle of a block;
+- two adjacent blocks back to back, and the same block twice;
+- loads of every width read 0 afterwards;
+- ordering with the hart's own accesses: a store just before it is
+  overwritten, a store just after it lands (the rest of the block stays
+  zero), and an `AMOADD.W` just after it reads 0;
+- `rs1` = every register `x1`–`x31`, including `sp`/`gp`/`tp` (saved to
+  memory around the case): the block is zeroed and `rs1` is unchanged.
+  `rs1` = `x0` (address 0) is skipped, since there is no RAM there;
+- no other register is written.
+
+For bit independence the only variable field is `rs1`: `rd` must be 0
+and the imm field holds funct12 = 4, which selects the operation, so
+both are opcode bits (like the csr field in the Zicsr suite). That
+gives 10 cases (the two-bit `rs1` registers), each checking the scan
+and that `rs1` is unchanged. Every `CBO.ZERO` runs armed, so without
+Zicboz each check is a `FAIL` (the `rs1` sweep and the bitx cases put
+back `sp`/`gp`/`tp` first). The `CBO.ZERO`-then-`AMOADD.W` case also
+needs A. Not tested: anything that has to trap
+(`CBO.ZERO` from S/U-mode with `CBZE` clear in `menvcfg`/`senvcfg`, or to a
+non-writable address).
+
+## The Zabha suite
+
+Zabha adds byte and halfword forms of the nine AMOs: `AMOSWAP`,
+`AMOADD`, `AMOXOR`, `AMOAND`, `AMOOR`, `AMOMIN`, `AMOMAX`, `AMOMINU`,
+`AMOMAXU`, each as `.B` and `.H`. It is its own extension, so it has its
+own suite directory, and all 18 exist on both widths:
+- **`zabha/amo.S`**: the 18 AMOs
+
+They work like the A suite's AMOs, only narrower: `rd` gets the old
+byte/halfword **sign-extended** (for `AMOMINU`/`AMOMAXU` too), only the
+low 8/16 bits of `rs2` take part, and exactly 1 or 2 bytes are
+written. So the tests follow `a/amo.S` (register sweeps and aliasing
+through `AMOADD.B`, value tables per instruction, `aq`/`rl`), with
+these additions:
+
+- **Every lane.** The value cases walk the target through all eight
+  byte offsets (`.B`) and all four halfword offsets (`.H`) of a
+  doubleword, so a fault in lane selection or in the shift on the load
+  or store side fails.
+- **Exactly 1 or 2 bytes written.** Every instruction runs at every
+  lane, and afterwards all 24 bytes of the buffer except the target
+  must still hold their fill. `rs2` is chosen per operation so that the
+  same operation done wider would change a neighbour (a carry out of
+  bit 7/15 for `AMOADD`, zeros above the lane for `AMOAND`, ...).
+- **`rs2` above the lane is ignored**: one case per instruction and
+  width has garbage there (on RV32 too). `MIN`/`MAX`/`MINU`/`MAXU` get
+  `(1, 0x100)` / `(1, 0x10000)`, where a register-wide compare picks
+  the other operand, and `(1, 0xff)` / `(1, 0xffff)` with the upper
+  bits clear, which must still compare as -1.
+- **Signed vs. unsigned** through the same pairs as the A suite, at 8
+  and 16 bits. `.H` also gets `(0x00ff, 0x0100)`, which a compare on
+  the low byte alone gets wrong, and `AMOADD.H 0x00ff+1`, whose carry
+  must reach the upper byte.
+- **Aliasing**: `rd==rs2` (`AMOSWAP.H`, and through `AMOADD.B`),
+  `rd==rs1`, `rs1==rs2` (`AMOSWAP.B` stores the address's low byte,
+  `AMOADD.H` adds its low halfword), `rd==rs1==rs2` (`AMOSWAP.H`),
+  `rs1=sp`, `rd=x0`, `rs2=x0` (`AMOSWAP.B` stores 0, `AMOOR.B` is an
+  atomic byte load). Sources are checked unmodified.
+
+The value, `aq`/`rl` and neighbour tables name their cases inline (the
+macro builds `"<description>: rd = old value"` / `": memory"` /
+`": neighbouring bytes untouched"`), so only the hand-written register
+tests have a string table.
+
+Bit independence: 136 cases per instruction (`rd`/`rs1`/`rs2` and
+`aq`/`rl`), each checking `rd` and the register-sized slot around the
+target, as in the A suite (`BX_C_ZB`). `AMOMIN` and `AMOMAXU` use the
+operand pair the other way round from the rest: with the shared pair
+they would keep the old value, and a case that ignored `rs2` would still
+pass.
+
+Every AMO runs armed. QEMU 10 leaves Zabha off by default (`-cpu
+rv64,zabha=true` turns it on; `make run` does), and without it each
+check is a `FAIL` with mcause 2. Not tested: misaligned `.H` (it traps,
+or with Zama16B may succeed within 16 bytes, so the outcome depends on
+the implementation), and `AMOCAS.B`/`AMOCAS.H`, which also need Zacas.
+
+## The privileged suite
+
+`MRET` and `WFI` come from the privileged architecture's machine-level
+ISA rather than from RV64I or an unprivileged extension, so they have a
+suite of their own (the base ISA's own SYSTEM instructions, `ECALL` and
+`EBREAK`, are in `i/system.S`). Identical on both widths apart from the
+CLINT access:
+- **`priv/mret.S`**: `MRET`
+- **`priv/wfi.S`**: `WFI`
+
+Both have a single fixed encoding, so there is nothing for bit
+independence to pair. Traps they cause on purpose go through the armed
+handler (see "Traps on purpose"), and the U-mode parts rely on the PMP
+entry `common.S` sets up.
+
+- **`priv/mret.S`**: every `MRET` is executed directly by test code with
+  `mepc` and `mstatus` set up by hand, so each of its effects is checked
+  on its own. The jump: it lands on `mepc`, including a compressed
+  instruction at an address that is 2 mod 4, and leaves `mepc`
+  unchanged. The interrupt-enable stack: `MIE` ← `MPIE` in both
+  directions, `MPIE` = 1 afterwards, and `MPP` becomes U if `misa` has
+  U, else M. The privilege change: with `MPP` = M an M-mode CSR read
+  after it doesn't trap; with `MPP` = U the same read traps as illegal
+  (mcause 2, `MPP` = 0 recorded, `mepc` on the read). `MPRV` is cleared
+  by an `MRET` to U-mode and kept by one to M-mode. `MRET` in U-mode is
+  illegal. That test can't simply point `mepc` at the `MRET`: one that
+  wrongly works would jump back to itself forever. Instead U-mode is
+  entered a few instructions earlier, the entry code counts its passes,
+  and a second pass (or a fall-through) runs into an `ECALL` that the
+  armed handler catches. Registers are unchanged. Because `MRET` copies
+  `MPIE` into `MIE` and leaves `MPIE` = 1, each test clears `MPIE` first
+  unless it sets it on purpose; otherwise `MIE` would quietly be turned
+  on. Not tested: that `mepc[0]` reads as 0 after a write of 1. The spec
+  requires it, but QEMU 10.0 keeps the bit (and `MRET` then jumps to the
+  odd address), so the test would fail on the reference platform.
+- **`priv/wfi.S`**: `WFI` may be a NOP, so the tests only check what
+  happens around the wait, never its length. The wake-up source is the
+  machine timer (`mtimecmp` in the CLINT). With the interrupt already
+  pending and `MIE` = 0, `WFI` completes and execution goes on at the
+  next instruction with no trap. The canonical `while (!MTIP) wfi;` loop
+  against a timer `WFI_DELAY` ticks in the future ends with no trap.
+  With `MIE` = 1 the interrupt is taken exactly once: `mcause` =
+  interrupt bit | 7, `mepc` = the instruction after the `WFI` (a
+  jump-to-self, so a `WFI` that doesn't wait gives the same `mepc`),
+  `MIE` = 0, `MPIE` = 1 and `MPP` = M on entry, and `MIE` = 1 after the
+  `MRET`. `mstatus.TW` = 1 changes nothing in M-mode. In U-mode with
+  `TW` = 1 and nothing pending, `WFI` is illegal (mcause 2, `mepc` on
+  the `WFI`, `MPP` = 0). The spec lets a `WFI` that completes within a
+  bounded time not trap, and with nothing pending only a NOP-`WFI`
+  completes, so this case pins down the usual (and QEMU's) behaviour.
+  Neither alternative hangs: an `ECALL` after it catches a `WFI` that
+  completes, and a timer interrupt set `WFI_DELAY` ticks ahead ends one
+  that really waits, both as a clean `FAIL`. Registers are unchanged. On
+  RV32, `mtime`/`mtimecmp` are read and written as two halves without
+  ever passing through a value in the past.
+
 ## Bit independence across fields
 
 The per-field sweeps in every suite vary one field of an encoding while
@@ -523,7 +1046,13 @@ the macros in `bitx.inc`:
   case with exactly those two bits set in those fields, and every other
   field at a fixed background. That's C(N,2) cases for N variable bits:
   105 per R-type (`rd`/`rs1`/`rs2`), 231 per I-type, load, store, JALR or
-  branch, 300 for LUI/AUIPC/JAL, 55 for most RVC formats.
+  branch, 300 for LUI/AUIPC/JAL, 136 per AMO or SC (`rd`/`rs1`/`rs2`
+  plus the `aq`/`rl` bits), 66 per LR, 231 for FENCE.I (its reserved
+  `rd`/`rs1`/`imm` fields, which must be ignored), 45 per CSR
+  instruction (`rd` plus `rs1`/uimm; the csr field is held at
+  `mscratch`), 10 for CBO.ZERO (`rs1` only), 55 for most RVC formats. An LR
+  case also checks that a following SC succeeds, i.e. that the
+  reservation landed on the address under test.
 - **Every instruction separately**, not once per format, since a
   coupling can just as well involve that instruction's own
   opcode/funct bits.
@@ -541,7 +1070,8 @@ the macros in `bitx.inc`:
   `ADD`) with the immediate fetched from a constant pool. `rd` is
   poisoned with a sentinel first; stores read back the whole doubleword
   around the target, so writes that are too wide or misplaced are
-  caught.
+  caught. An AMO case is two checks, `rd` and the memory slot, both
+  against the background encoding run on a second slot.
 - **Control transfers** (JAL with its full ±1 MiB reach, JALR, the six
   branches, `C.J`, `C.BEQZ`, `C.BNEZ`, `C.JR`, `C.JALR`) land in a
   counting sled that `bitx.S` builds at run time in ~1 MiB of `.bss`:
@@ -572,18 +1102,21 @@ make            # builds both images:
                 #   build/rv32/rvc_test.{elf,bin}   RV32IMAC
 ```
 
-or manually (one width shown; the other uses `rv32imac_zicsr_zifencei`,
+or manually (one width shown; the other uses `rv32imac_zicsr_zifencei_zicboz_zabha`,
 `ilp32`, `XLEN=32` and `elf32lriscv`):
 
 ```sh
 SRCS="common.S main_tests.S \
-      rvc/tests.S rvc/quadrant0.S rvc/quadrant1.S rvc/quadrant2.S \
-      base/tests.S base/loads.S base/stores.S base/lui.S base/auipc.S base/jal.S \
-      base/jalr.S base/branches.S base/op_alu.S base/op_imm.S base/op_imm32.S \
-      base/op_alu32.S m/tests.S m/mul.S m/div.S bitx.S"
+      c/tests.S c/quadrant0.S c/quadrant1.S c/quadrant2.S \
+      i/tests.S i/loads.S i/stores.S i/lui.S i/auipc.S i/jal.S \
+      i/jalr.S i/branches.S i/op_alu.S i/op_imm.S i/op_imm32.S \
+      i/op_alu32.S i/system.S m/tests.S m/mul.S m/div.S a/tests.S a/amo.S a/lrsc.S \
+      zicsr/tests.S zicsr/reg.S zicsr/imm.S zifencei/tests.S zifencei/fencei.S \
+      zicboz/tests.S zicboz/cbozero.S zabha/tests.S zabha/amo.S \
+      priv/tests.S priv/mret.S priv/wfi.S bitx.S"
 for f in $SRCS; do
   mkdir -p build/rv64/$(dirname $f)
-  riscv64-linux-gnu-as -march=rv64imac_zicsr_zifencei -mabi=lp64 --defsym XLEN=64 \
+  riscv64-linux-gnu-as -march=rv64imac_zicsr_zifencei_zicboz_zabha -mabi=lp64 --defsym XLEN=64 \
       --fatal-warnings -I src -o build/rv64/${f%.S}.o src/$f
 done
 riscv64-linux-gnu-ld -m elf64lriscv -Ttext=0x80000000 --no-dynamic-linker -nostdlib \
@@ -592,10 +1125,11 @@ riscv64-linux-gnu-objcopy -O binary rvc_test.elf rvc_test.bin
 ```
 
 Run it from the repo root. The source paths are relative to `src/`. The
-files in `src/rvc/`, `src/base/` and `src/m/` `.include` `xlen.inc` and
-`bitx.inc` from `src/` (`-I src`). Each object keeps its source's
-subdirectory under `build/rv64/`, because the three suites' `tests.S` files
-share a basename.
+files in `src/c/`, `src/i/`, `src/m/`, `src/a/`, `src/zicsr/`,
+`src/zifencei/`, `src/zicboz/`, `src/zabha/` and `src/priv/` `.include` `xlen.inc`, `harness.inc` and `bitx.inc` from
+`src/` (`-I src`). Each object keeps its
+source's subdirectory under `build/rv64/`, because the suites' `tests.S`
+files share a basename.
 
 `common.o` must be listed first at link time — it contains `_start`,
 and needs to land at the very base of `.text` so the entry point ends
@@ -610,35 +1144,52 @@ and reset the hart with `pc = 0x80000000`, `mode = M`.
 ```sh
 make run        # RV64 then RV32; or make run64 / make run32
 # or:
-qemu-system-riscv64 -M virt -bios none -kernel build/rv64/rvc_test.elf \
-    -nographic -serial mon:stdio
-qemu-system-riscv32 -M virt -bios none -kernel build/rv32/rvc_test.elf \
-    -nographic -serial mon:stdio
+qemu-system-riscv64 -M virt -bios none -cpu rv64,zabha=true \
+    -kernel build/rv64/rvc_test.elf -nographic -serial mon:stdio
+qemu-system-riscv32 -M virt -bios none -cpu rv32,zabha=true \
+    -kernel build/rv32/rvc_test.elf -nographic -serial mon:stdio
 ```
+(`zabha=true` because QEMU's `rv64`/`rv32` CPUs leave Zabha off by
+default; without it every Zabha check is a `FAIL`.)
 (`Ctrl-A X` to exit QEMU; the firmware parks in `WFI` after the summary
 and never exits on its own.) `-kernel` with an ELF works fine here since
 QEMU just loads the ELF's segments and jumps to its entry point, which
 is the same `0x80000000` load address as the flat `.bin`.
+
+To check that a missing extension fails cleanly instead of hanging,
+switch it off with `-cpu`, e.g. `-cpu rv64,a=false,zawrs=false`,
+`-cpu rv32,zicboz=false`, `-cpu rv64,zifencei=false` or plain `-cpu rv64`
+for Zabha (QEMU refuses
+`a=false` while Zawrs is on). The expected failure counts are in
+"Unimplemented instructions fail, they don't hang".
 
 ## Adding another test suite
 
 `common.S` doesn't know or care what it's testing — it just calls
 `run_tests` (in `main_tests.S`) and reads `pass_count`/`fail_count`
 afterward. `main_tests.S` in turn just calls each suite's own entry
-point. To add a new suite (say, the `A` extension):
+point. To add a new suite (say, the `F` extension):
 
-1. Create a directory for the suite (e.g. `a/`) and write its
-   top-level file, `a/tests.S`, with `.global run_a_tests`, printing its
+1. Create a directory for the suite (e.g. `f/`) and write its
+   top-level file, `f/tests.S`, with `.global run_f_tests`, printing its
    own banner and calling into one or more category files in the same
-   directory (e.g. `a/lrsc.S`, `a/amo.S`, with no `a_` prefix: the
+   directory (e.g. `f/load_store.S`, `f/arith.S`, with no `f_` prefix: the
    directory already says which suite a file belongs to). This is the same
-   way `rvc/tests.S` calls into `rvc/quadrant0/1/2.S`, `base/tests.S`
-   into `base/*.S`, and `m/tests.S` into `m/mul.S`/`m/div.S`.
+   way `c/tests.S` calls into `c/quadrant0/1/2.S`, `i/tests.S`
+   into `i/*.S`, `m/tests.S` into `m/mul.S`/`m/div.S`, `a/tests.S`
+   into `a/amo.S`/`a/lrsc.S`, `zicsr/tests.S` into
+   `zicsr/reg.S`/`zicsr/imm.S`, `zifencei/tests.S` into
+   `zifencei/fencei.S`, `zicboz/tests.S` into `zicboz/cbozero.S`,
+   `zabha/tests.S` into `zabha/amo.S`, and
+   `priv/tests.S` into `priv/mret.S`/`priv/wfi.S`.
+   Every extension gets its own directory, even a single-instruction one
+   like Zifencei or Zicboz.
    Use `check`/`uart_puts` from `common.S` the same way the existing
-   suites do. Split it into multiple files if it's large enough to
+   suites do, and start every test with `TEST_BEGIN <name>` (`.include
+   "harness.inc"` after `xlen.inc`) so its name is out before it runs. Split it into multiple files if it's large enough to
    benefit — each category file should expose exactly one entry symbol
    and keep its macros/subroutines local.
-2. Add one line to `main_tests.S`: `call run_a_tests`.
+2. Add one line to `main_tests.S`: `call run_f_tests`.
 3. Add your new file(s) to `SUITE_SRCS` in the `Makefile`.
 4. Give every new instruction bit-independence coverage: `.include
    "bitx.inc"`, write a `BX_C_*` case macro and call the matching
@@ -700,8 +1251,8 @@ your target:
 
 Additionally, for the base-ISA load suite specifically:
 
-4. **Misaligned loads/stores are assumed not to trap.** `base/loads.S`
-   and `base/stores.S` test offsets like `+4`/`-4` against 8-byte
+4. **Misaligned loads/stores are assumed not to trap.** `i/loads.S`
+   and `i/stores.S` test offsets like `+4`/`-4` against 8-byte
    `LD`/`SD` accesses, which QEMU handles transparently but real
    hardware may legitimately fault on (the RISC-V base ISA permits,
    but does not require, misaligned-access support). There's no
@@ -711,15 +1262,48 @@ Additionally, for the base-ISA load suite specifically:
 And for the bit-independence tests (see "Bit independence across
 fields"):
 
-5. **RAM beyond the image.** The flat binary is ~1.6 MB (RV64) or
-   ~1.35 MB (RV32), and the run-time counting sled adds ~1 MiB of
-   `.bss` after it — about 2.5 MiB from `0x80000000` in all.
-6. **Executing freshly written code.** The control-transfer cases copy
+5. **RAM beyond the image.** The flat binary is ~4.7 MB (RV64) or
+   ~3.6 MB (RV32), and the run-time counting sled adds ~1 MiB of
+   `.bss` after it — about 5.5 MiB (RV64) or 4.5 MiB (RV32) from
+   `0x80000000` in all.
+6. **CSRs.** The Zicsr suite assumes `mscratch` is fully read/write,
+   `mepc` holds even values as written, and `misa` is implemented (not
+   read as 0) and reports I, M, A and C.
+7. **Executing freshly written code.** The control-transfer cases copy
    an instruction into RAM and run it after `FENCE.I` (hence Zifencei in
    `-march`). The target must allow instruction fetch from RAM that was
-   just written, with `FENCE.I` as the only synchronisation. The
+   just written, with `FENCE.I` as the only synchronisation. On a hart
+   without Zifencei (reset's probe traps) the `FENCE.I` is skipped: the
+   run still completes, and the Zifencei suite fails, but these cases
+   are then only right if instruction fetch is coherent anyway (QEMU's
+   is). A stale fetch runs an earlier planted instruction whose target
+   is still inside the sled, so it should show as a wrong count rather
+   than a runaway; that has not been tried on such hardware. The
    bit-independence loads and stores, unlike the per-field ones above,
    are always naturally aligned.
+8. **Zicboz and its block size.** The Zicboz suite needs `CBO.ZERO`
+   implemented (QEMU enables it by default) and assumes a 64-byte cache
+   block. Set `CBOZ_BLOCK_BYTES` in `zicboz/cbozero.S` to your platform's
+   block size (the device tree's `riscv,cboz-block-size`; a power of two
+   from 8 to 256). A wrong value shows up as failing "zeroes exactly"
+   cases, not a trap. Without Zicboz, every Zicboz check is a `FAIL`
+   with mcause 2; likewise every A check without A (see
+   "Unimplemented instructions fail, they don't hang").
+9. **Zabha.** The Zabha suite needs the byte/halfword AMOs, which
+   QEMU's `rv64`/`rv32` CPUs leave off unless given `zabha=true` (the
+   `Makefile`'s run targets pass it). Without Zabha every Zabha check
+   is a `FAIL` with mcause 2, and the run completes.
+10. **U-mode, PMP and the CLINT.** The U-mode cases of `i/system.S`,
+   `priv/mret.S` and `priv/wfi.S` need U-mode, and PMP, if
+   implemented, must accept `common.S`'s all-memory entry 0 (a hart
+   with no PMP at all is fine, whether its PMP CSRs read as zero or
+   trap). `priv/wfi.S` needs a
+   CLINT/ACLINT at `CLINT_BASE` (default `0x02000000`, QEMU virt's;
+   hart 0's `mtimecmp` at `+0x4000`, `mtime` at `+0xbff8`) and a timer
+   for which `WFI_DELAY` (10000 ticks, 1 ms at QEMU's 10 MHz) is short
+   to wait but longer than the few instructions between arming the
+   timer and the `WFI`. A `WFI` that never wakes hangs with its test's
+   name as the last line printed.
 
 ## Files
 
@@ -727,35 +1311,60 @@ All assembly sources and include files live under `src/`. The
 documentation, the `Makefile` and the container scripts stay in the repo
 root. Inside `src/`, the shared harness and include files sit at the top
 level. Each suite has its own subdirectory holding its orchestrator
-(`tests.S`) and its category files: `src/rvc/`, `src/base/`, `src/m/`.
+(`tests.S`) and its category files: `src/c/`, `src/i/`, `src/m/`,
+`src/a/`, `src/zicsr/`, `src/zifencei/`, `src/zicboz/`, `src/zabha/`,
+`src/priv/`.
 Source paths elsewhere in this document are relative to `src/`.
 
 - `common.S` — reusable boot/UART/reporter harness (suite-agnostic).
 - `main_tests.S` — top-level dispatcher (defines `run_tests`).
-- `rvc/tests.S` — RVC suite orchestrator (defines `run_rvc_tests`).
-- `rvc/quadrant0.S` / `rvc/quadrant1.S` / `rvc/quadrant2.S` — the RVC
+- `c/tests.S` — RVC suite orchestrator (defines `run_c_tests`).
+- `c/quadrant0.S` / `c/quadrant1.S` / `c/quadrant2.S` — the RVC
   per-instruction test bodies, one file per RVC opcode quadrant.
-- `base/tests.S` — base-ISA suite orchestrator (defines `run_base_tests`).
-- `base/loads.S` — the base-ISA load instruction test bodies.
-- `base/stores.S` — the base-ISA store instruction test bodies.
-- `base/lui.S` — the `LUI` test body.
-- `base/auipc.S` — the `AUIPC` test body.
-- `base/jal.S` — the `JAL` test body.
-- `base/jalr.S` — the `JALR` test body.
-- `base/branches.S` — the conditional-branch test bodies.
-- `base/op_alu.S` — the R-type ALU test bodies.
-- `base/op_imm.S` — the OP-IMM (I-type ALU) test bodies.
-- `base/op_imm32.S` — the OP-IMM-32 (RV64 word-width I-type ALU) test
+- `i/tests.S` — base-ISA suite orchestrator (defines `run_i_tests`).
+- `i/loads.S` — the base-ISA load instruction test bodies.
+- `i/stores.S` — the base-ISA store instruction test bodies.
+- `i/lui.S` — the `LUI` test body.
+- `i/auipc.S` — the `AUIPC` test body.
+- `i/jal.S` — the `JAL` test body.
+- `i/jalr.S` — the `JALR` test body.
+- `i/branches.S` — the conditional-branch test bodies.
+- `i/op_alu.S` — the R-type ALU test bodies.
+- `i/op_imm.S` — the OP-IMM (I-type ALU) test bodies.
+- `i/op_imm32.S` — the OP-IMM-32 (RV64 word-width I-type ALU) test
   bodies.
-- `base/op_alu32.S` — the OP-32 (RV64 word-width R-type ALU) test
+- `i/op_alu32.S` — the OP-32 (RV64 word-width R-type ALU) test
   bodies.
+- `i/system.S` — the `ECALL`/`EBREAK` test bodies.
 - `m/tests.S` — M suite orchestrator (defines `run_m_tests`).
 - `m/mul.S` — the multiply test bodies.
 - `m/div.S` — the divide/remainder test bodies.
+- `a/tests.S` — A suite orchestrator (defines `run_a_tests`).
+- `a/amo.S` — the atomic memory operation (AMO) test bodies.
+- `a/lrsc.S` — the load-reserved/store-conditional test bodies.
+- `zicsr/tests.S` — Zicsr suite orchestrator (defines `run_zicsr_tests`).
+- `zicsr/reg.S` — the `CSRRW`/`CSRRS`/`CSRRC` test bodies.
+- `zicsr/imm.S` — the `CSRRWI`/`CSRRSI`/`CSRRCI` test bodies.
+- `zifencei/tests.S` — Zifencei suite orchestrator (defines
+  `run_zifencei_tests`).
+- `zifencei/fencei.S` — the `FENCE.I` test bodies.
+- `zicboz/tests.S` — Zicboz suite orchestrator (defines
+  `run_zicboz_tests`).
+- `zicboz/cbozero.S` — the `CBO.ZERO` test bodies.
+- `zabha/tests.S` — Zabha suite orchestrator (defines
+  `run_zabha_tests`).
+- `zabha/amo.S` — the byte/halfword AMO test bodies.
+- `priv/tests.S` — privileged suite orchestrator (defines
+  `run_priv_tests`).
+- `priv/mret.S` — the `MRET` test bodies.
+- `priv/wfi.S` — the `WFI` test bodies.
 - `bitx.inc` — macros shared by every file's bit-independence tests
   (included, not linked).
 - `bitx.S` — the run-time counting sled for the control-transfer
   bit-independence tests.
+- `harness.inc` — `TEST_BEGIN`, which announces a test's name before it
+  runs, and the `TRAP_*` macros for tests that trap on purpose
+  (included, not linked).
 - `xlen.inc` — the RV64/RV32 switch (`REG_S`/`REG_L`, `LIX`/`LIXT`,
   `LWUX`, `INTX_MIN`/`INTX_MAX`, ...), included first by every file.
 - `Makefile` — build/run/disasm/clean targets, for both widths.
