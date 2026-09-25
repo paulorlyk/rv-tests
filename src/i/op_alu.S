@@ -39,6 +39,13 @@
  * set together, per instruction. So all ten get the full C(15,2) = 105
  * pairs; see bitx.inc for the method and the reference-value scheme.
  *
+ * x0 as an operand or destination, through the idioms that rely on it:
+ * ADD rd=x0 (the result is discarded), ADD rs2=x0 (MV), SUB rs1=x0
+ * (NEG), SLTU rs1=x0 (SNEZ) and SLT rs2=x0 (SLTZ). The other source
+ * register holds a nonzero value in each, so reading x0 as anything
+ * but zero changes the result. (The bitx register candidates never
+ * include x0.)
+ *
  * RV32 image (xlen.inc): only rs2[4:0] selects the shift amount, so the
  * masking tests use rs2=32/33 and the maximum is 31.
  * ===================================================================== */
@@ -115,6 +122,21 @@
     call    check
 .endm
 
+/* T_OP_X0 v3, v4, expect, name, insn... -- t3 = v3, t4 = v4, t2
+ * poisoned, then insn (an R-type with x0 in one field, rd = t2); checks
+ * t2. */
+.macro T_OP_X0 v3, v4, expect, name, insn:vararg
+    TEST_BEGIN \name
+    LIX     t3, \v3
+    LIX     t4, \v4
+    LIXT    t2, 0x5a5a5a5a5a5a5a5a
+    \insn
+    la      a0, \name
+    LIX     a1, \expect
+    mv      a2, t2
+    call    check
+.endm
+
 tests_i_op_alu:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
@@ -176,6 +198,22 @@ tests_i_op_alu:
     LIX     a1, 42
     mv      a2, t2
     call    check
+
+    /* --- x0 in each field --- */
+    TEST_BEGIN str_op_rd_x0
+    LIX     t3, 100
+    LIX     t4, 23
+    add     x0, t3, t4
+    la      a0, str_op_rd_x0
+    LIX     a1, 0
+    mv      a2, x0
+    call    check
+    T_OP_X0 0x7654321, 999, 0x7654321, str_op_rs2_x0_mv,   add t2, t3, x0
+    T_OP_X0 999, 5, -5,                str_op_rs1_x0_neg,  sub t2, x0, t4
+    T_OP_X0 999, 7, 1,                 str_op_rs1_x0_snez, sltu t2, x0, t4
+    T_OP_X0 999, 0, 0,                 str_op_rs1_x0_snez0, sltu t2, x0, t4
+    T_OP_X0 -5, -999, 1,               str_op_rs2_x0_sltz, slt t2, t3, x0
+    T_OP_X0 5, 999, 0,                 str_op_rs2_x0_sltz0, slt t2, t3, x0
 
     /* ===== ADD ===== */
     T_OP_VAL add, 0xffffffffffffffff, 1, 0x0000000000000000, str_add_wrap
@@ -485,28 +523,35 @@ bitx_i_op_alu:
     ret
 
     .section .rodata
-str_op_rd_ra:  .asciz "OP rd=ra(x1) (via ADD)"
-str_op_rd_t0:  .asciz "OP rd=t0(x5) (via ADD)"
-str_op_rd_s0:  .asciz "OP rd=s0(x8) (via ADD)"
-str_op_rd_a0:  .asciz "OP rd=a0(x10) (via ADD)"
-str_op_rd_s10: .asciz "OP rd=s10(x26) (via ADD)"
-str_op_rd_t6:  .asciz "OP rd=t6(x31) (via ADD)"
-str_op_rs1_ra:  .asciz "OP rs1=ra(x1) (via ADD)"
-str_op_rs1_t0:  .asciz "OP rs1=t0(x5) (via ADD)"
-str_op_rs1_s0:  .asciz "OP rs1=s0(x8) (via ADD)"
-str_op_rs1_a0:  .asciz "OP rs1=a0(x10) (via ADD)"
-str_op_rs1_s10: .asciz "OP rs1=s10(x26) (via ADD)"
-str_op_rs1_t6:  .asciz "OP rs1=t6(x31) (via ADD)"
-str_op_rs2_ra:  .asciz "OP rs2=ra(x1) (via ADD)"
-str_op_rs2_t0:  .asciz "OP rs2=t0(x5) (via ADD)"
-str_op_rs2_s0:  .asciz "OP rs2=s0(x8) (via ADD)"
-str_op_rs2_a0:  .asciz "OP rs2=a0(x10) (via ADD)"
-str_op_rs2_s10: .asciz "OP rs2=s10(x26) (via ADD)"
-str_op_rs2_t6:  .asciz "OP rs2=t6(x31) (via ADD)"
-str_op_alias_all_same: .asciz "OP rd==rs1==rs2 (via ADD, doubles)"
-str_op_alias_rd_rs1:   .asciz "OP rd==rs1 (via ADD)"
-str_op_alias_rd_rs2:   .asciz "OP rd==rs2 (via ADD)"
-str_op_alias_rs1_rs2:  .asciz "OP rs1==rs2, rd distinct (via ADD)"
+str_op_rd_ra:  .asciz "ADD rd=ra(x1) (OP format)"
+str_op_rd_t0:  .asciz "ADD rd=t0(x5) (OP format)"
+str_op_rd_s0:  .asciz "ADD rd=s0(x8) (OP format)"
+str_op_rd_a0:  .asciz "ADD rd=a0(x10) (OP format)"
+str_op_rd_s10: .asciz "ADD rd=s10(x26) (OP format)"
+str_op_rd_t6:  .asciz "ADD rd=t6(x31) (OP format)"
+str_op_rs1_ra:  .asciz "ADD rs1=ra(x1) (OP format)"
+str_op_rs1_t0:  .asciz "ADD rs1=t0(x5) (OP format)"
+str_op_rs1_s0:  .asciz "ADD rs1=s0(x8) (OP format)"
+str_op_rs1_a0:  .asciz "ADD rs1=a0(x10) (OP format)"
+str_op_rs1_s10: .asciz "ADD rs1=s10(x26) (OP format)"
+str_op_rs1_t6:  .asciz "ADD rs1=t6(x31) (OP format)"
+str_op_rs2_ra:  .asciz "ADD rs2=ra(x1) (OP format)"
+str_op_rs2_t0:  .asciz "ADD rs2=t0(x5) (OP format)"
+str_op_rs2_s0:  .asciz "ADD rs2=s0(x8) (OP format)"
+str_op_rs2_a0:  .asciz "ADD rs2=a0(x10) (OP format)"
+str_op_rs2_s10: .asciz "ADD rs2=s10(x26) (OP format)"
+str_op_rs2_t6:  .asciz "ADD rs2=t6(x31) (OP format)"
+str_op_alias_all_same: .asciz "ADD rd==rs1==rs2 (OP format, doubles)"
+str_op_alias_rd_rs1:   .asciz "ADD rd==rs1 (OP format)"
+str_op_alias_rd_rs2:   .asciz "ADD rd==rs2 (OP format)"
+str_op_alias_rs1_rs2:  .asciz "ADD rs1==rs2, rd distinct (OP format)"
+str_op_rd_x0:          .asciz "ADD rd=x0 discards result, x0 reads 0 (OP format)"
+str_op_rs2_x0_mv:      .asciz "ADD rs2=x0 (MV): rd = rs1"
+str_op_rs1_x0_neg:     .asciz "SUB rs1=x0 (NEG): rd = -rs2"
+str_op_rs1_x0_snez:    .asciz "SLTU rs1=x0 (SNEZ), rs2 = 7: 1"
+str_op_rs1_x0_snez0:   .asciz "SLTU rs1=x0 (SNEZ), rs2 = 0: 0"
+str_op_rs2_x0_sltz:    .asciz "SLT rs2=x0 (SLTZ), rs1 = -5: 1"
+str_op_rs2_x0_sltz0:   .asciz "SLT rs2=x0 (SLTZ), rs1 = 5: 0"
 
 str_add_wrap:    .asciz "ADD wrap: all-ones + 1 = 0"
 str_add_walking: .asciz "ADD two walking patterns"

@@ -13,8 +13,8 @@ were invisible until an actual QEMU run.
 
 ## Build / run
 
-- `make`: builds both images, `build/rv64/rvc_test.{elf,bin}` and
-  `build/rv32/rvc_test.{elf,bin}`. Toolchain prefix `CROSS ?=
+- `make`: builds both images, `build/rv64/rv_tests.{elf,bin}` and
+  `build/rv32/rv_tests.{elf,bin}`. Toolchain prefix `CROSS ?=
   riscv64-linux-gnu-`. Every file is assembled with `--defsym XLEN=64|32`
   and `--fatal-warnings`; RV32 uses `-march=rv32imac_zicsr_zifencei_zicboz_zabha
   -mabi=ilp32` and `ld -m elf32lriscv`.
@@ -24,20 +24,21 @@ were invisible until an actual QEMU run.
 - `make run` (both), `make run64`, `make run32`: QEMU `virt`, `-bios none`
   (`qemu-system-riscv64` / `qemu-system-riscv32`), `-cpu rv64,zabha=true`
   / `-cpu rv32,zabha=true`: QEMU leaves Zabha off by default, and
-  without it the Zabha suite FAILs. After the summary the
-  firmware parks in a `WFI` loop and never exits, so a non-interactive
-  check needs a timeout (each run takes about a second), e.g.
-  `timeout 30 qemu-system-riscv32 -M virt -bios none -cpu rv32,zabha=true -kernel build/rv32/rvc_test.elf -nographic -serial mon:stdio > build/rv32/run.log`,
+  without it the Zabha suite FAILs. After the
+  summary the firmware parks in a `WFI` loop and never exits, so a
+  non-interactive check needs a timeout (each run takes about a second), e.g.
+  `timeout 30 qemu-system-riscv32 -M virt -bios none -cpu rv32,zabha=true -kernel build/rv32/rv_tests.elf -nographic -serial mon:stdio > build/rv32/run.log`,
   then confirm that `grep -c FAIL` on the log is 0, the summary line
-  reports `fail_count = 0`, and there's no `UNEXPECTED TRAP`. Always check
-  both widths. When touching `common.S`'s boot or trap code or the
+  reports `fail_count = 0`, and there's no `UNEXPECTED TRAP`. Always
+  check both widths. When touching `common.S`'s boot or trap code or the
   U-mode tests, also run each width with `-cpu rv64,zabha=true,pmp=false` /
   `-cpu rv32,zabha=true,pmp=false` (a hart without PMP, whose PMP CSRs trap): same
-  totals, no failures. When touching the trap handler, `check_trap`,
+  totals, no other failures. When touching the trap handler, `check_trap`,
   `SYNC_I`, or the A/Zicboz/Zabha/Zifencei tests, also run each width
   with the extension switched off (`-cpu rv64,a=false,zawrs=false`,
-  `zicboz=false`, `zifencei=false`, each with `zabha=true` added; plain
-  `-cpu rv64` for Zabha; and all at once): the run must
+  `zicboz=false`, `zifencei=false`, each with `zabha=true` added;
+  plain `-cpu rv64` for Zabha; and all at once; QEMU refuses
+  `a=false` while Zawrs is on): the run must
   reach its summary with the same totals, no `UNEXPECTED TRAP`, and
   exactly the failure counts in README "Unimplemented instructions
   fail, they don't hang".
@@ -60,7 +61,7 @@ All assembly sources and include files live under `src/`. Docs, the
 `Makefile` and the container scripts stay in the repo root. Source paths
 in this file are relative to `src/`.
 
-- `common.S`: suite-agnostic harness (boot, PMP setup for U-mode, trap
+- `common.S`: suite-agnostic harness (boot, `.bss` zeroing, PMP setup for U-mode, trap
   handler, UART, the `check` comparator, `pass_count`/`fail_count`,
   summary/halt). It calls `run_tests`. It must be first on the link line so that `_start` lands
   at `0x80000000`.
@@ -83,8 +84,15 @@ in this file are relative to `src/`.
     `.B` and `.H`, on both widths); its value/neighbour tables name
     their cases inline (`T_ZB_VAL`/`T_ZB_NEIGH` take a description)
   - Privileged: `priv/tests.S` → `priv/mret.S` (MRET), `priv/wfi.S`
-    (WFI, woken by the CLINT machine timer). ECALL/EBREAK are RV32I
-    proper and live in `i/system.S`.
+    (WFI, woken by the CLINT machine timer), and the M/U separation
+    files `priv/csrpriv.S` (M-mode CSRs from U-mode), `priv/irqpriv.S`
+    (M-mode interrupts in U-mode, CLINT `msip`/`mtimecmp`; in M-mode:
+    vectored `mtvec`, MSI/MTI priority),
+    `priv/mstatus.S` (MPP/UXL legality, `misa.U`, trap-entry stack from
+    U). ECALL/EBREAK are RV32I proper and live in `i/system.S`,
+    FENCE (with FENCE.TSO and PAUSE) in `i/fence.S`.
+    `zicboz/cbozero.S` also has the `menvcfg`/`senvcfg.CBZE` U-mode
+    cases.
 - Every extension gets its own suite directory, even a single-instruction
   one like Zifencei; `i/` holds only RV32I/RV64I proper.
 - `xlen.inc`: the RV64/RV32 switch, `.include`d first by every file (see
@@ -108,26 +116,35 @@ in this file are relative to `src/`.
   `.option rvc`/`.option norvc`. Always check the encoding width in
   `objdump -d -M no-aliases` output; the directive alone isn't proof.
 - **`check(a0=name_ptr, a1=expected, a2=actual)`** in `common.S` is the
-  universal reporter. It prints `"<name> - OK"` or `"- FAIL"` and
-  bumps `pass_count`/`fail_count`. It clobbers `t0`–`t6` and `a0`–`a2`.
+  universal reporter. It bumps `pass_count`/`fail_count`; a pass
+  prints nothing, a failure prints `"<name> - FAIL"`. Output is
+  grouped per instruction (README "Output: one status per
+  instruction"): the first word of the name is the instruction, a
+  change of it closes the open group with `" OK"`/`" FAIL"` and prints
+  `"<INSN>:"`. So **every test name starts with the mnemonic it
+  tests** (`ADD rd=ra(x1) (OP format)`, not `OP rd=ra(x1) (via ADD)`;
+  `IRQ` for interrupt cases), and a suite banner calls `insn_close`
+  before it prints. It clobbers `t0`–`t6` and `a0`–`a2`.
   Every case goes through it so it counts toward the shared totals.
   It also records the first `FAIL_LOG_MAX` (8) failures (name
   pointer, expected, actual), so the summary can list them with their
   values. The name must therefore be a `.rodata` string, never one
   built at run time.
 - **Name first: `TEST_BEGIN <name>` starts every test**, before any of
-  its setup, so a test that traps or hangs has its name as the last
-  UART line (`"<name> - "` then `UNEXPECTED TRAP`). It calls
-  `test_begin` in `common.S`; the `check` with the same name then
-  prints only the verdict. It is register-transparent, but place it
+  its setup, so a test that traps has its name in the trap report
+  (`"<name> - "` then `UNEXPECTED TRAP`) and one that hangs has its
+  instruction group as the last UART line. It calls `test_begin` in
+  `common.S`, which opens the group and remembers the name until the
+  `check` with the same name. It is register-transparent, but place it
   above any PC-reference label (e.g. `.Lauipc_sp:`, `.Lebreak_pc_marker:`),
   never between a label and the instruction it marks, and before
   `sp`/`gp` are swept. A test with several checks gets one `TEST_BEGIN`
   per check, each just before the code for that check. bitx cases need
   nothing: `BX_ENTER` announces the name of the case's first
-  `BX_REPORT`. A passing run's log must stay free of lines ending in
-  `" - "` (a dangling announcement means a `TEST_BEGIN` name doesn't
-  match its `check`).
+  `BX_REPORT`. A passing run's log holds only suite banners,
+  `"<INSN>:"`/`" OK"` pairs and the summary: check that every group
+  header is a real mnemonic (or `IRQ`), which catches a new name that
+  doesn't start with its instruction.
 - **Capture before reuse.** If a macro sweeps a register that might be
   `a0`/`a1`/`a2` or `t0`–`t6`, copy the result into a safe scratch register
   right after the instruction under test. Use `t2` by convention, or an
@@ -173,12 +190,12 @@ in this file are relative to `src/`.
   `mscratch` across a trap.
 - **An instruction under test that may be unimplemented runs armed,
   and a trap becomes `FAIL`s, never an `UNEXPECTED TRAP` hang.** This
-  covers every instruction of the A, Zicboz, Zabha and Zifencei suites, and
-  every future extension. `TRAP_ARM resume` before it (one arming
+  covers every instruction of the A, Zicboz, Zabha and Zifencei
+  suites, and every future extension. `TRAP_ARM resume` before it (one arming
   covers a group, e.g. an `LR`/`SC` pair, with nothing stored between
   `LR` and `SC`), `TRAP_DISARM` after it (`TRAP_DISARM_R reg` while
   `sp` may still be swept), and after the test's checks `TRAP_FAILS
-  resume, name...` naming *every* check the test makes, so line counts
+  resume, name...` naming *every* check the test makes, so check counts
   don't change. A test that sweeps `sp`/`gp`/`tp` restores them at its
   resume label first; bitx cases use `BX_NAME`/`BX_ENTER label`/
   `BX_REPORT_AT`/`BX_TRAP_FAILS` (see `BX_C_AMO_` in `a/amo.S`). A
@@ -250,13 +267,35 @@ Every test must build and pass on both widths. Mechanics (`xlen.inc`):
    (mcause 7, store/AMO access fault). Check explicitly that the fixed
    register is outside every swept list.
 2. **Skipping capture-before-reuse.** This hit `T_SRLI_REG`, `T_SRAI_REG`,
-   `T_ANDI_REG`, and an early `C.NOP` test.
+   `T_ANDI_REG`, and an early `C.NOP` test. Register pairs add a twist:
+   capturing `rd` into `s1` before reading `rd+1` overwrites `rd+1`
+   first when the swept pair is `s0:s1`. Capture a pair's high register
+   before its low one.
 3. **GNU `as` branch relaxation is unstable at exact compressibility
    boundaries.** A `.rept`-padded boundary test can assemble correctly in
    isolation but silently widen when it sits inside a bigger file, with no
    warning. The fix is to back off one filler instruction from the
    theoretical maximum and label the test honestly (`+252` rather than
    `+254` for `C.BEQZ`/`C.BNEZ`, `+2044` rather than `+2046` for `C.J`).
+4. **A test passes on stale state.** The instruction under test does
+   nothing (or writes the wrong place) and the check still reads the
+   expected value, left there by an earlier test or by the setup. This
+   hit the `T_S*_RS1`/`_RS2` store sweeps (the same constant stored to
+   the same address test after test), `T_L*_RD` with `rd=t0` (the
+   register that had just held the stored pattern), the load `_OFF`
+   tests (a wrong offset read a pattern an earlier test left nearby;
+   they also wrote and read through the same offset, so a misdecoded
+   offset moved both), and the jump/branch offset tests (a short
+   landing ran on through a `nop` filler to the target). None showed in
+   a normal run; each was found by mutation. Rules: set a store's
+   target to a different value first, through another encoding; poison
+   every destination register; clear buffers a misdecoded address could
+   read (`ld_clear` in `i/loads.S`); check an offset through an
+   absolute address; make jump fillers poison (forward) or escapes to
+   the poison (backward, never falling back into the jump under test);
+   run conditional instructions both ways (the branch bitx cases have
+   taken and not-taken series). Then mutation-test: delete or break the
+   instruction and confirm the check fails.
 
 ## Other GNU `as` quirks
 
@@ -301,7 +340,10 @@ To cover a new instruction:
 - Load constants with `BX_LDC`/`BX_POOL` (never `li`, never anything
   gp-relative).
 - Control transfers go through the sled (`BX_PLANT`/`BX_GO`/`BX_COUNT`,
-  after `call bx_sled_init`).
+  after `call bx_sled_init`). A conditional one runs the enumeration
+  twice, with operands that take it and with operands that don't
+  (`BX_C_BR`'s `tne`, `BX_C_CB`'s `tk`; names end `not taken`), so a
+  pair that forces the condition is caught, not just a wrong offset.
 - Mutation-test the new case macro in a scratch copy of the tree: break
   the instruction's operand or expected value and confirm the cases fail.
 
@@ -357,9 +399,18 @@ Other notes:
 - The UART clock is `UART_CLK_HZ` in `common.S` (default `1843200`). The
   115200-baud divisor is computed from it at assemble time.
 - The code assumes the standard ns16550a register layout with 1-byte
-  stride (RBR/THR/DLL @0, IER/DLM @1, FCR @2, LCR @3, MCR @4, LSR @5).
+  stride (RBR/THR/DLL @0, IER/DLM @1, FCR @2, LCR @3, MCR @4, LSR @5),
+  plus TEMT (LSR bit 6) and an LCR that reads back for `i/fence.S`'s
+  I/O-ordering cases. The optional scratch register (SCR @7) is not
+  used: don't add tests that depend on it.
+- Nothing may depend on RAM contents at boot: the flat `.bin` doesn't
+  contain `.bss`, so `common.S`'s reset zeroes `__bss_start`..`_end`
+  before anything else touches it. Put zero-initialised state in `.bss`,
+  never in a section reset doesn't clear. Loads and stores under test
+  are naturally aligned (the offset tests move the base instead), so a
+  hart that traps on misaligned accesses runs the suites unchanged.
 - The bitx control-transfer tests need about 1 MiB of RAM after the
-  image (about 5.5 MiB from `0x80000000` in total on RV64, 4.5 MiB on
+  image (about 6.1 MiB from `0x80000000` in total on RV64, 5 MiB on
   RV32). They also need instruction fetch from freshly written RAM,
   synchronised by `FENCE.I` (`SYNC_I`; skipped without Zifencei, in
   which case fetch must be coherent on its own).
@@ -372,9 +423,16 @@ Other notes:
   Zicboz, Zabha and Zifencei instructions, which run armed: without those
   extensions their checks FAIL with the trap's mcause and the run
   completes.
-- The U-mode cases (`i/system.S`, `priv/`) need U-mode and, if PMP is
-  implemented, one that accepts `common.S`'s all-memory entry 0. No PMP
+- The U-mode cases (`i/system.S`, `i/fence.S`, `priv/`,
+  `zicboz/cbozero.S`) need
+  U-mode and, if PMP is implemented, one that accepts `common.S`'s
+  all-memory entry 0. No PMP
   at all is fine: reset's PMP writes run under a temporary `mtvec`
-  (`pmp_skip`) that steps over them if they trap. `priv/wfi.S` needs a
-  CLINT at `CLINT_BASE` (default `0x02000000`) and a timer for which
-  `WFI_DELAY` (10000 ticks) is short.
+  (`pmp_skip`) that steps over them if they trap. `priv/wfi.S` and
+  `priv/irqpriv.S` need a CLINT at `CLINT_BASE` (default `0x02000000`,
+  defined in each) and, for WFI, a timer for which `WFI_DELAY` (10000
+  ticks) is short; `priv/irqpriv.S` also needs vectored `mtvec` with a
+  64-byte-aligned BASE (without it, its three vectored-interrupt checks
+  FAIL; they don't hang). QEMU 10.0 checks `senvcfg.CBZE` even without
+  S-mode, so `-cpu ...,s=false,h=false` fails the six U-mode
+  CBO.ZERO checks that expect it to work.

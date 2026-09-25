@@ -138,7 +138,8 @@
 /* T_JAL_FWD dist, name -- unconditional forward jump of exactly "dist"
  * bytes (multiple of 4, >=8), rd=x0 (the offset is what's under test
  * here, not the link register -- that's T_JAL_REG's job). Structure:
- * jal(4) + poison li(4) + N nop fillers(4N), dist = 8 + 4N. */
+ * jal(4) + poison li(4) + N poison fillers(4N), dist = 8 + 4N: landing
+ * anywhere short of the target leaves s2 = 999. */
 .macro T_JAL_FWD dist, name
     TEST_BEGIN \name
     LIX     s2, 0
@@ -146,7 +147,7 @@
     jal     zero, 1f
     LIX     s2, 999                 /* poison: only hit if JAL landed wrong */
     .rept (\dist - 8) / 4
-    nop
+    LIX     s2, 999                 /* poison: landing in the pad, short */
     .endr
 1:
     la      a0, \name
@@ -157,10 +158,12 @@
 
 /* T_JAL_BWD dist, name -- unconditional backward jump of exactly
  * "dist" bytes (multiple of 4, >=8). Jumps ahead first (plain, not
- * under test) to reach the filler run without falling into the target
- * linearly, then the real JAL jumps back over that filler to the
- * success marker. dist = 8 + 4N (4 for the success-marker li, 4 for
- * the bookkeeping jump past the filler, 4N for N nop fillers). */
+ * under test) straight to the JAL, which jumps back over the filler to
+ * the success marker. dist = 8 + 4N (4 for the success-marker li, 4
+ * for the bookkeeping jump past the filler, 4N for N filler jumps).
+ * Every filler slot jumps on to the poison after the JAL, so a JAL that
+ * lands short, in the filler, fails: with nops there it would run into
+ * the same JAL again and loop. T_JAL_FWD's filler is poison too. */
 .macro T_JAL_BWD dist, name
     TEST_BEGIN \name
     LIX     s2, 0
@@ -168,12 +171,12 @@
 4:
     LIX     s2, 1                   /* success marker: the true target */
     jal     zero, 6f
-5:
     .rept (\dist - 8) / 4
-    nop
+    jal     zero, 8f                /* landing in the pad, short: escape */
     .endr
+5:
     jal     zero, 4b
-    LIX     s2, 99                  /* poison: only hit if JAL landed wrong */
+8:  LIX     s2, 99                  /* poison: only hit if JAL landed wrong */
 6:
     la      a0, \name
     LIX     a1, 1

@@ -20,10 +20,18 @@
  *     register x[uimm] holding a value that would give a different
  *     answer if it were read instead;
  *   - uimm=0: CSRRWI writes 0, CSRRSI/CSRRCI write nothing, so with
- *     uimm=0 they read the read-only mhartid/misa without trapping and
- *     agree with CSRRS rs1=x0 (zicsr/reg.S covers that form itself);
+ *     uimm=0 they read the read-only mhartid/mimpid and the WARL misa
+ *     without trapping and agree with CSRRS rs1=x0 (zicsr/reg.S covers
+ *     that form itself); one instruction per test, run armed, so a
+ *     trap is a FAIL under that instruction's own name;
  *   - rd = old value for each; rd sweep through CSRRWI; rd=x0 for each
- *     (the write still happens).
+ *     (the write still happens);
+ *   - a write to a read-only CSR traps, in M-mode too: CSRRWI (with
+ *     uimm 0: it writes regardless) on mhartid, and CSRRSI/CSRRCI with a
+ *     nonzero uimm on mvendorid/marchid, each raise an
+ *     illegal-instruction exception (mcause 2, mepc on the instruction,
+ *     mtval 0 or its bits) and leave rd unwritten. Run armed
+ *     (harness.inc), so a write that goes through is a FAIL.
  * mscratch is the CSR under test, as in zicsr/reg.S.
  *
  * Bit independence across fields (bitx_zicsr_imm, at the end): rd and
@@ -159,6 +167,102 @@
     BX_REPORT "\nm bitx rd=x\rd uimm=\u csr"
 .endm
 
+/* T_CSRI_RO0 insn, csr, name -- "insn s2, csr, 0" (CSRRSI/CSRRCI,
+ * uimm=0: no write) on a read-only or WARL CSR must not trap and must
+ * read what CSRRS csr, x0 reads (s1). One instruction per test, so a
+ * trap is reported under its own name. s2 is poisoned to ~s1 first, so
+ * an instruction that doesn't write rd fails. Run armed (TRAP_ARM,
+ * harness.inc), reference read included: a trap is a FAIL with its
+ * mcause, never an UNEXPECTED TRAP hang. Uses s1, s2. */
+.macro T_CSRI_RO0 insn, csr, name
+    TEST_BEGIN \name
+    TRAP_ARM .Lro0_trap\@
+    csrrs   s1, \csr, x0
+    not     s2, s1
+    \insn   s2, \csr, 0
+    TRAP_DISARM
+    la      a0, \name
+    mv      a1, s1
+    mv      a2, s2
+    call    check
+    TRAP_FAILS .Lro0_trap\@, \name
+.endm
+
+/* T_CSRI_RO rd, desc, insn... -- \insn writes a read-only M-mode CSR
+ * (CSRRWI, or CSRRSI/CSRRCI with a nonzero uimm), in M-mode, with rd = a3 when rd = 1 and a4 = 0: it must
+ * raise an illegal-instruction exception whatever the value written,
+ * and leave rd alone. Run armed (TRAP_ARM, harness.inc), so a write
+ * that wrongly goes through falls through to a FAIL, never a hang.
+ * trap_mcause is set to -1 first so a stale record can't pass the
+ * cause check. Checks: exactly one trap, mcause 2, mepc on the
+ * instruction, mtval 0 or its bits, rd unchanged. Uses s2-s4, clobbers
+ * t0-t3, a3, a4. */
+.macro T_CSRI_RO rd, desc, insn:vararg
+    .pushsection .rodata
+.Lro_once\@:  .asciz "\desc: traps exactly once"
+.Lro_cause\@: .asciz "\desc: mcause == 2 (illegal instruction)"
+.Lro_mepc\@:  .asciz "\desc: mepc == the instruction"
+.Lro_mtval\@: .asciz "\desc: mtval == 0 or the instruction"
+    .if \rd
+.Lro_rd\@:    .asciz "\desc: rd not written"
+    .endif
+    .popsection
+    TEST_BEGIN .Lro_once\@
+    .option push
+    .option norelax
+    lw      s3, trap_count
+    la      s2, .Lro_at\@
+    la      t0, trap_mcause
+    .option pop
+    li      t1, -1
+    REG_S   t1, 0(t0)
+    li      a4, 0
+    LIXT    a3, 0x5ac3a55a3cc3a5c3
+    TRAP_ARM .Lro_back\@
+.Lro_at\@:
+    \insn
+    TRAP_DISARM                     /* no trap: disarm, then FAIL */
+.Lro_back\@:
+    mv      s4, a3
+    .option push
+    .option norelax
+    lw      t0, trap_count
+    .option pop
+    sub     s3, t0, s3
+    la      a0, .Lro_once\@
+    li      a1, 1
+    mv      a2, s3
+    call    check
+    TEST_BEGIN .Lro_cause\@
+    TRAP_LD t2, mcause
+    la      a0, .Lro_cause\@
+    li      a1, 2
+    mv      a2, t2
+    call    check
+    TEST_BEGIN .Lro_mepc\@
+    TRAP_LD t2, mepc
+    la      a0, .Lro_mepc\@
+    mv      a1, s2
+    mv      a2, t2
+    call    check
+    TEST_BEGIN .Lro_mtval\@
+    TRAP_LD t2, mtval
+    li      t3, 0
+    beqz    t2, 1f
+    LWUX    t3, 0(s2)
+1:  la      a0, .Lro_mtval\@
+    mv      a1, t3
+    mv      a2, t2
+    call    check
+    .if \rd
+    TEST_BEGIN .Lro_rd\@
+    la      a0, .Lro_rd\@
+    LIXT    a1, 0x5ac3a55a3cc3a5c3
+    mv      a2, s4
+    call    check
+    .endif
+.endm
+
 tests_zicsr_imm:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
@@ -166,6 +270,7 @@ tests_zicsr_imm:
     jal     ra, test_csri_fields
     jal     ra, test_csri_values
     jal     ra, test_csri_readonly
+    jal     ra, test_csri_ro_write
 
     jal     ra, bitx_zicsr_imm
 
@@ -254,49 +359,15 @@ test_csri_readonly:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
-    TEST_BEGIN str_csrrsi_mhartid
-    csrrs   s1, mhartid, x0
-    csrrsi  s2, mhartid, 0
-    csrrci  s4, mhartid, 0
-    la      a0, str_csrrsi_mhartid
-    mv      a1, s1
-    mv      a2, s2
-    call    check
-    TEST_BEGIN str_csrrci_mhartid
-    la      a0, str_csrrci_mhartid
-    mv      a1, s1
-    mv      a2, s4
-    call    check
-
-    TEST_BEGIN str_csrrsi_mimpid
-    csrrs   s1, mimpid, x0
-    csrrsi  s2, mimpid, 0
-    csrrci  s4, mimpid, 0
-    la      a0, str_csrrsi_mimpid
-    mv      a1, s1
-    mv      a2, s2
-    call    check
-    TEST_BEGIN str_csrrci_mimpid
-    la      a0, str_csrrci_mimpid
-    mv      a1, s1
-    mv      a2, s4
-    call    check
+    T_CSRI_RO0 csrrsi, mhartid, str_csrrsi_mhartid
+    T_CSRI_RO0 csrrci, mhartid, str_csrrci_mhartid
+    T_CSRI_RO0 csrrsi, mimpid,  str_csrrsi_mimpid
+    T_CSRI_RO0 csrrci, mimpid,  str_csrrci_mimpid
 
     /* misa is WARL rather than read-only, but a non-writing read must
      * not disturb it either way */
-    TEST_BEGIN str_csrrsi_misa
-    csrrs   s1, misa, x0
-    csrrsi  s2, misa, 0
-    csrrci  s4, misa, 0
-    la      a0, str_csrrsi_misa
-    mv      a1, s1
-    mv      a2, s2
-    call    check
-    TEST_BEGIN str_csrrci_misa
-    la      a0, str_csrrci_misa
-    mv      a1, s1
-    mv      a2, s4
-    call    check
+    T_CSRI_RO0 csrrsi, misa,    str_csrrsi_misa
+    T_CSRI_RO0 csrrci, misa,    str_csrrci_misa
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
@@ -306,6 +377,21 @@ test_csri_readonly:
  * bitx.inc. rd background t2 (x7), uimm background 0; csr fixed at
  * mscratch. Only va and the sentinel are used from the pool, and va
  * differs per instruction (see CSRI_Q). */
+/* =======================================================================
+ *  Writes to read-only CSRs trap, in M-mode too
+ * ======================================================================= */
+test_csri_ro_write:
+    addi    sp, sp, -16
+    REG_S   ra, 0(sp)
+
+    T_CSRI_RO 1, "CSRRWI rd, mhartid, 0 (M-mode)", csrrwi a3, mhartid, 0
+    T_CSRI_RO 1, "CSRRSI rd, mvendorid, 1 (M-mode)", csrrsi a3, mvendorid, 1
+    T_CSRI_RO 1, "CSRRCI rd, marchid, 1 (M-mode)", csrrci a3, marchid, 1
+
+    REG_L   ra, 0(sp)
+    addi    sp, sp, 16
+    ret
+
 bitx_zicsr_imm:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)

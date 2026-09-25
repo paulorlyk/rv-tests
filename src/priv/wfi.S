@@ -402,7 +402,9 @@ test_wfi_regs:
     LIXT    \r, (wf_k * 0x0101010101010101)
     .set    wf_k, wf_k + 1
     .endr
+    TRAP_ARM .Lwf_r_trap            /* register-transparent */
     wfi
+    TRAP_DISARM
     li      t1, 0
     .set    wf_k, 1
     .irp r, a0,a1,a2,a3,a4,a5,a6,a7,t4,t5,t6,s6,s7,s8,s9,s10,s11
@@ -415,6 +417,12 @@ test_wfi_regs:
     csrw    mie, zero
     jal     ra, wfi_timer_off
     WF_CHK  str_wfi_regs, 0, s6
+    j       .Lwf_r_done
+.Lwf_r_trap:                        /* the WFI trapped: a FAIL, not a hang */
+    csrw    mie, zero
+    jal     ra, wfi_timer_off
+    TRAP_REPORT str_wfi_regs
+.Lwf_r_done:
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16

@@ -37,7 +37,7 @@
  * times over. Same scoping rationale as i/jal.S: every bit of the
  * low 12 is covered in both directions; the range extends to ~+-4KB
  * and the construction cost of the top bits isn't worth the binary
- * size. Offsets are built from .rept-generated 4-byte nop fillers and
+ * size. Offsets are built from .rept-generated 4-byte poison fillers and
  * every one was verified by disassembly (target - branch computed
  * directly), not trusted from the .rept count -- see the README's note
  * on assembler relaxation for why that matters at boundaries.
@@ -45,8 +45,10 @@
  * Bit independence across fields (bitx_i_branches, at the end):
  * every bit pair among rs1, rs2 and the 12-bit offset set together,
  * C(22,2) = 231 cases per instruction less the 10 noted at BX_C_BR, for
- * all six -- the full +-4 KiB offset range, landing in the counting sled
- * built at run time by bitx.S. See bitx.inc.
+ * all six, each run once with operands that take the branch and once
+ * with operands that don't -- the full +-4 KiB offset range, landing in
+ * (or falling through into) the counting sled built at run time by
+ * bitx.S. See bitx.inc.
  * ===================================================================== */
 
     .include "xlen.inc"
@@ -64,27 +66,32 @@
 
     .section .text
 
-/* BX_C_BR insn, teq, nm, rs1, rs2, v -- one bit-independence case
+/* BX_C_BR insn, teq, tne, nm, rs1, rs2, v -- one bit-independence case
  * (bitx.inc, bitx.S) for a branch with raw offset field v (bits 12:1,
- * bit 12 the sign). rs1/rs2 get the pool values va/vb, chosen per
- * instruction so the branch is taken; when rs1 == rs2 both read vb and
- * the outcome is teq instead (taken on equal operands, or not). The
- * branch is assembled into .rodata, planted in the counting sled and
- * run, and must land on exactly the right slot -- or, when not taken,
- * fall through.
+ * bit 12 the sign). rs1/rs2 get the pool values va/vb, and the outcome
+ * is tne (1 = taken) for them; when rs1 == rs2 both read vb and the
+ * outcome is teq instead (taken on equal operands, or not). The branch
+ * is assembled into .rodata, planted in the counting sled and run, and
+ * must land on exactly the right slot -- or, when not taken, fall
+ * through. Each branch runs the whole enumeration twice: once with
+ * operands that take it (tne = 1) and once with operands that don't
+ * (tne = 0, names end "not taken"), so a bit pair that forces the
+ * condition either way fails, not only one that corrupts the offset.
+ * (A forward not-taken case at offset +4 can't tell the two apart:
+ * both land on the next slot.)
  *
  * Offset +2 alone (bit 1 crossed with a register bit, 10 cases) is
  * skipped for the same reason as JAL's (i/jal.S): it lands in the
  * branch's own upper half. */
-.macro BX_C_BR insn, teq, nm, rs1, rs2, v
+.macro BX_C_BR insn, teq, tne, nm, rs1, rs2, v
     .if ((\v) - (((\v) & 0x1000) << 1)) > 2
-    BX_C_BR_ \insn, \teq, \nm, \rs1, \rs2, \v, ((\v) - (((\v) & 0x1000) << 1)), (BX_EXIT - ((\v) - (((\v) & 0x1000) << 1)) - 2 * BX_MARGIN)
+    BX_C_BR_ \insn, \teq, \tne, \nm, \rs1, \rs2, \v, ((\v) - (((\v) & 0x1000) << 1)), (BX_EXIT - ((\v) - (((\v) & 0x1000) << 1)) - 2 * BX_MARGIN)
     .elseif ((\v) - (((\v) & 0x1000) << 1)) < 0
-    BX_C_BR_ \insn, \teq, \nm, \rs1, \rs2, \v, ((\v) - (((\v) & 0x1000) << 1)), BX_SITE_B
+    BX_C_BR_ \insn, \teq, \tne, \nm, \rs1, \rs2, \v, ((\v) - (((\v) & 0x1000) << 1)), BX_SITE_B
     .endif
 .endm
 
-.macro BX_C_BR_ insn, teq, nm, rs1, rs2, v, d, site
+.macro BX_C_BR_ insn, teq, tne, nm, rs1, rs2, v, d, site
     BX_ENTER
     .pushsection .rodata
     .balign 4
@@ -100,9 +107,13 @@
     .if \rs1 == \rs2
     BX_COUNT \site, \d, 4, \teq
     .else
-    BX_COUNT \site, \d, 4, 1
+    BX_COUNT \site, \d, 4, \tne
     .endif
+    .if \tne
     BX_REPORT "\nm bitx rs1=x\rs1 rs2=x\rs2 off=\v"
+    .else
+    BX_REPORT "\nm bitx rs1=x\rs1 rs2=x\rs2 off=\v not taken"
+    .endif
 .endm
 
 /* T_BR insn, v1, v2, taken, name
@@ -159,9 +170,13 @@
 .endm
 
 /* T_BR_FWD / T_BR_BWD dist, name -- offset sweep, through BEQ.
- * Forward: beq(4) + poison li(4) + N nop fillers(4N), dist = 8 + 4N.
- * Backward: jump ahead past the filler run first (not under test),
- * then branch back over it. dist = 8 + 4N. */
+ * Forward: beq(4) + poison li(4) + N poison fillers(4N), dist = 8 + 4N:
+ * landing anywhere short of the target leaves s4 = 999.
+ * Backward: jump ahead straight to the branch (not under test), which
+ * branches back over the filler to the marker. dist = 8 + 4N. Every
+ * filler slot jumps on to the poison after the branch, so landing
+ * short, in the filler, is a FAIL rather than a loop through the same
+ * branch. */
 .macro T_BR_FWD dist, name
     TEST_BEGIN \name
     LIX     s4, 0
@@ -170,7 +185,7 @@
     beq     t1, t2, 1f
     LIX     s4, 999                 /* poison: only hit if branch landed wrong */
     .rept (\dist - 8) / 4
-    nop
+    LIX     s4, 999                 /* poison: landing in the pad, short */
     .endr
 1:
     la      a0, \name
@@ -188,12 +203,12 @@
 4:
     LIX     s4, 1                   /* success marker: the true target */
     jal     zero, 6f
-5:
     .rept (\dist - 8) / 4
-    nop
+    jal     zero, 8f                /* landing in the pad, short: escape */
     .endr
+5:
     beq     t1, t2, 4b
-    LIX     s4, 99                  /* poison: only hit if branch landed wrong */
+8:  LIX     s4, 99                  /* poison: only hit if branch landed wrong */
 6:
     la      a0, \name
     LIX     a1, 1
@@ -459,19 +474,33 @@ bitx_i_branches:
     REG_S   ra, 0(sp)
 
     call    bx_sled_init
-    /* operands chosen so each branch is taken; the signed/unsigned
-     * pairs use -5 vs 3, which order differently under the two
-     * readings. Offset background +8 for the register-only pairs. */
+    /* First with operands that take each branch, then with operands
+     * that don't; the signed/unsigned pairs use -5 vs 3, which order
+     * differently under the two readings. Offset background +8 for
+     * the register-only pairs. */
     BX_POOL 0x0123456789abcdef, 0x0123456789abcdef
-    BX_E_RRI5 BX_C_BR, "beq, 1, BEQ", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
+    BX_E_RRI5 BX_C_BR, "beq, 1, 1, BEQ", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
     BX_POOL 0x0123456789abcdef, 0x0123456789abcdee
-    BX_E_RRI5 BX_C_BR, "bne, 0, BNE", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
+    BX_E_RRI5 BX_C_BR, "bne, 0, 1, BNE", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
     BX_POOL -5, 3
-    BX_E_RRI5 BX_C_BR, "blt, 0, BLT", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
-    BX_E_RRI5 BX_C_BR, "bgeu, 1, BGEU", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
+    BX_E_RRI5 BX_C_BR, "blt, 0, 1, BLT", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
+    BX_E_RRI5 BX_C_BR, "bgeu, 1, 1, BGEU", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
     BX_POOL 3, -5
-    BX_E_RRI5 BX_C_BR, "bge, 1, BGE", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
-    BX_E_RRI5 BX_C_BR, "bltu, 0, BLTU", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
+    BX_E_RRI5 BX_C_BR, "bge, 1, 1, BGE", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
+    BX_E_RRI5 BX_C_BR, "bltu, 0, 1, BLTU", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
+
+    /* not taken: the same pools swapped between the equal/unequal and
+     * the signed/unsigned pairs */
+    BX_POOL 0x0123456789abcdef, 0x0123456789abcdee
+    BX_E_RRI5 BX_C_BR, "beq, 1, 0, BEQ", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
+    BX_POOL 0x0123456789abcdef, 0x0123456789abcdef
+    BX_E_RRI5 BX_C_BR, "bne, 0, 0, BNE", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
+    BX_POOL 3, -5
+    BX_E_RRI5 BX_C_BR, "blt, 0, 0, BLT", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
+    BX_E_RRI5 BX_C_BR, "bgeu, 1, 0, BGEU", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
+    BX_POOL -5, 3
+    BX_E_RRI5 BX_C_BR, "bge, 1, 0, BGE", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
+    BX_E_RRI5 BX_C_BR, "bltu, 0, 0, BLTU", 28, 29, "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100,0x200,0x400,0x800,0x1000", 8
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16

@@ -7,7 +7,7 @@
  * calls each category file's entry point in turn. Category files
  * (i/loads.S, i/stores.S, i/lui.S, i/auipc.S, i/jal.S,
  * i/jalr.S, i/branches.S, i/op_alu.S, i/op_imm.S, i/op_imm32.S,
- * i/op_alu32.S, i/system.S so far; more can be added the same way
+ * i/op_alu32.S, i/system.S, i/fence.S so far; more can be added the same way
  * RVC's quadrant0/1/2 files were) each expose exactly one symbol and
  * keep their own macros/subroutines/data local.
  *
@@ -38,6 +38,7 @@ run_i_tests:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
+    call    insn_close          /* end the previous suite's last group */
     la      a0, str_i_banner
     call    uart_puts
 
@@ -53,6 +54,7 @@ run_i_tests:
     call    tests_i_op_imm32
     call    tests_i_op_alu32
     call    tests_i_system
+    call    tests_i_fence
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16

@@ -34,12 +34,17 @@
  * starts at 0x80000000) and we don't have a load/store-access-fault
  * handler, so it would hang rather than usefully fail.
  *
- * Offsets here are not constrained to be naturally aligned for the
- * width being loaded -- the RISC-V base ISA permits (without
- * mandating hardware support for) misaligned accesses, and QEMU's TCG
- * emulation -- this project's primary validation target -- handles
- * them transparently. This is not guaranteed portable to all real
- * hardware; see the README.
+ * Every access is naturally aligned. The offset tests store the value
+ * through an absolute address and move the base register instead
+ * (base = anchor - (off mod width)), so +2047 and the other odd
+ * offsets are still encoded, the offset field alone decides where the
+ * load reads, and a hart without misaligned-access support runs the
+ * suite unchanged.
+ *
+ * No test can pass on stale state: each per-field test first zeroes the
+ * whole buffer (ld_clear), so a load from a misdecoded address reads
+ * zeros, and poisons its destination register, so a load that doesn't
+ * write rd leaves the poison.
  *
  * Bit independence across fields (bitx_i_loads, called last): every
  * bit pair among rd, rs1 and the 12-bit offset set together, C(22,2) =
@@ -92,14 +97,29 @@
     BX_REPORT "\nm bitx rd=x\rd rs1=x\rs1 off=\v"
 .endm
 
+/* ld_clear: zero the whole base_anchor buffer. Every per-field load test
+ * calls it first, so the only bytes holding the test pattern are the
+ * ones it stores itself: a load from a misdecoded address (a wrong
+ * offset bit, a wrong base register) reads zeros, not a pattern an
+ * earlier test left behind. Clobbers t0, t1. */
+ld_clear:
+    la      t0, base_anchor - 2304
+    la      t1, base_anchor + 2304
+1:  sw      zero, 0(t0)
+    addi    t0, t0, 4
+    bltu    t0, t1, 1b
+    ret
+
 /* =======================================================================
  *  Shared macros, byte width (LB / LBU)
  * ======================================================================= */
 .macro T_LB8_RD insn, rdreg, expect, name
     TEST_BEGIN \name
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    \rdreg, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
     la      s0, base_anchor
-    LIX     t0, 0xaa
-    sb      t0, 0(s0)
+    LIX     t1, 0xaa                /* t1, not t0: t0 is an rdreg candidate */
+    sb      t1, 0(s0)
     \insn   \rdreg, 0(s0)
     mv      t2, \rdreg              /* capture before a0-a2 reused */
     la      a0, \name
@@ -110,6 +130,8 @@
 
 .macro T_LB8_RS1 insn, basereg, expect, name
     TEST_BEGIN \name
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    a4, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
     la      \basereg, base_anchor
     LIX     t1, 0xaa                /* t1, not t0: t0 is itself one of the
                                       * swept basereg candidates, and using
@@ -125,9 +147,12 @@
 
 .macro T_LB8_OFF insn, off, expect, name
     TEST_BEGIN \name
-    la      s0, base_anchor
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    a4, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
+    la      t3, base_anchor + (\off) - ((\off) & 0)
     LIX     t0, 0xaa
-    sb      t0, \off(s0)
+    sb      t0, 0(t3)
+    la      s0, base_anchor - ((\off) & 0)
     \insn   a4, \off(s0)
     la      a0, \name
     LIX     a1, \expect
@@ -137,6 +162,8 @@
 
 .macro T_LB8_VAL insn, rawval, expect, name
     TEST_BEGIN \name
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    a4, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
     la      s0, base_anchor
     LIX     t0, \rawval
     sb      t0, 0(s0)
@@ -152,9 +179,11 @@
  * ======================================================================= */
 .macro T_LH16_RD insn, rdreg, expect, name
     TEST_BEGIN \name
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    \rdreg, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
     la      s0, base_anchor
-    LIX     t0, 0xaaaa
-    sh      t0, 0(s0)
+    LIX     t1, 0xaaaa                /* t1, not t0: t0 is an rdreg candidate */
+    sh      t1, 0(s0)
     \insn   \rdreg, 0(s0)
     mv      t2, \rdreg
     la      a0, \name
@@ -165,6 +194,8 @@
 
 .macro T_LH16_RS1 insn, basereg, expect, name
     TEST_BEGIN \name
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    a4, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
     la      \basereg, base_anchor
     LIX     t1, 0xaaaa              /* t1, not t0 -- see T_LB8_RS1 */
     sh      t1, 0(\basereg)
@@ -177,9 +208,12 @@
 
 .macro T_LH16_OFF insn, off, expect, name
     TEST_BEGIN \name
-    la      s0, base_anchor
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    a4, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
+    la      t3, base_anchor + (\off) - ((\off) & 1)
     LIX     t0, 0xaaaa
-    sh      t0, \off(s0)
+    sh      t0, 0(t3)
+    la      s0, base_anchor - ((\off) & 1)
     \insn   a4, \off(s0)
     la      a0, \name
     LIX     a1, \expect
@@ -189,6 +223,8 @@
 
 .macro T_LH16_VAL insn, rawval, expect, name
     TEST_BEGIN \name
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    a4, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
     la      s0, base_anchor
     LIX     t0, \rawval
     sh      t0, 0(s0)
@@ -204,9 +240,11 @@
  * ======================================================================= */
 .macro T_LW32_RD insn, rdreg, expect, name
     TEST_BEGIN \name
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    \rdreg, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
     la      s0, base_anchor
-    LIX     t0, 0xaaaaaaaa
-    sw      t0, 0(s0)
+    LIX     t1, 0xaaaaaaaa                /* t1, not t0: t0 is an rdreg candidate */
+    sw      t1, 0(s0)
     \insn   \rdreg, 0(s0)
     mv      t2, \rdreg
     la      a0, \name
@@ -217,6 +255,8 @@
 
 .macro T_LW32_RS1 insn, basereg, expect, name
     TEST_BEGIN \name
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    a4, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
     la      \basereg, base_anchor
     LIX     t1, 0xaaaaaaaa          /* t1, not t0 -- see T_LB8_RS1 */
     sw      t1, 0(\basereg)
@@ -229,9 +269,12 @@
 
 .macro T_LW32_OFF insn, off, expect, name
     TEST_BEGIN \name
-    la      s0, base_anchor
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    a4, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
+    la      t3, base_anchor + (\off) - ((\off) & 3)
     LIX     t0, 0xaaaaaaaa
-    sw      t0, \off(s0)
+    sw      t0, 0(t3)
+    la      s0, base_anchor - ((\off) & 3)
     \insn   a4, \off(s0)
     la      a0, \name
     LIX     a1, \expect
@@ -241,6 +284,8 @@
 
 .macro T_LW32_VAL insn, rawval, expect, name
     TEST_BEGIN \name
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    a4, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
     la      s0, base_anchor
     LIX     t0, \rawval
     sw      t0, 0(s0)
@@ -256,9 +301,11 @@
  * ======================================================================= */
 .macro T_LD64_RD rdreg, name
     TEST_BEGIN \name
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    \rdreg, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
     la      s0, base_anchor
-    LIXT    t0, 0xaaaaaaaaaaaaaaaa
-    sd      t0, 0(s0)
+    LIXT    t1, 0xaaaaaaaaaaaaaaaa  /* t1, not t0 -- see T_LB8_RD */
+    sd      t1, 0(s0)
     ld      \rdreg, 0(s0)
     mv      t2, \rdreg
     la      a0, \name
@@ -269,6 +316,8 @@
 
 .macro T_LD64_RS1 basereg, name
     TEST_BEGIN \name
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    a4, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
     la      \basereg, base_anchor
     LIXT    t1, 0xaaaaaaaaaaaaaaaa  /* t1, not t0 -- see T_LB8_RS1 */
     sd      t1, 0(\basereg)
@@ -281,9 +330,12 @@
 
 .macro T_LD64_OFF off, name
     TEST_BEGIN \name
-    la      s0, base_anchor
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    a4, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
+    la      t3, base_anchor + (\off) - ((\off) & 7)
     LIXT    t0, 0xaaaaaaaaaaaaaaaa
-    sd      t0, \off(s0)
+    sd      t0, 0(t3)
+    la      s0, base_anchor - ((\off) & 7)
     ld      a4, \off(s0)
     la      a0, \name
     LIXT    a1, 0xaaaaaaaaaaaaaaaa
@@ -293,6 +345,8 @@
 
 .macro T_LD64_VAL rawval, name
     TEST_BEGIN \name
+    jal     ra, ld_clear            /* only the target will hold the pattern */
+    LIXT    a4, 0x5a5a5a5a5a5a5a5a  /* poison: the load must replace it */
     la      s0, base_anchor
     LIX     t0, \rawval
     sd      t0, 0(s0)

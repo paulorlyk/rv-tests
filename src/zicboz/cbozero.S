@@ -55,9 +55,17 @@
  *     memory around the case): the block is zeroed and rs1 is left
  *     unmodified. rs1 = x0 (address 0) is skipped: there is no RAM
  *     there;
- *   - CBO.ZERO leaves the other registers alone.
- * Not tested: anything that has to trap (CBO.ZERO from S/U-mode with
- * menvcfg/senvcfg.CBZE clear, or on a non-writable address).
+ *   - CBO.ZERO leaves the other registers alone;
+ *   - below M-mode it is gated by menvcfg.CBZE and, if the hart has
+ *     S-mode (misa.S), senvcfg.CBZE. Run in U-mode (MRET, MPP = U) with
+ *     an ECALL after it: both set -- no trap (the ECALL traps, mcause
+ *     8) and the block is zeroed; menvcfg.CBZE clear -- illegal
+ *     (mcause 2, mepc on it, buffer untouched); only senvcfg.CBZE
+ *     clear -- illegal with S-mode, zeroes without. In M-mode it works
+ *     with both clear. menvcfg/senvcfg are put back afterwards. (QEMU
+ *     10.0 checks senvcfg even without S-mode, so with s=false the six
+ *     "works in U-mode" checks fail there.)
+ * Not tested: CBO.ZERO on a non-writable address.
  *
  * TRAPS: every CBO.ZERO runs armed (TRAP_ARM / TRAP_FAILS, harness.inc),
  * so on a hart without Zicboz, or one where it faults, each check is a
@@ -65,7 +73,9 @@
  * CBO.ZERO-then-AMOADD.W case also needs A (its AMO is armed too).
  *
  * ASSUMPTIONS: in M-mode CBO.ZERO is always permitted (no envcfg bit
- * gates M-mode).
+ * gates M-mode). menvcfg exists (U-mode is implemented), and senvcfg
+ * too when misa.S is set; U-mode and PMP as for the other U-mode tests
+ * (common.S's reset sets PMP up).
  *
  * Bit independence across fields (bitx_zicboz_cbozero, at the end):
  * the only variable field is rs1; rd (0) and funct12 (4) are opcode
@@ -238,6 +248,7 @@ tests_zicboz_cbozero:
     REG_S   ra, 0(sp)
 
     jal     ra, test_cbozero
+    jal     ra, test_cz_envcfg
 
     jal     ra, bitx_zicboz_cbozero
 
@@ -508,6 +519,119 @@ test_cbozero:
     addi    sp, sp, 16
     ret
 
+/* =======================================================================
+ *  menvcfg/senvcfg.CBZE: CBO.ZERO below M-mode
+ *
+ *  s8 = misa.S (senvcfg exists only with S-mode), s9/s10 = menvcfg/
+ *  senvcfg as found (put back at the end), s11 = what cz_scan returns
+ *  for an untouched buffer.
+ * ======================================================================= */
+    .equ    CZ_CBZE, 0x80               /* menvcfg/senvcfg.CBZE, bit 7 */
+
+/* CZ_ENVCFG m, s -- menvcfg.CBZE = m, and senvcfg.CBZE = s if the hart
+ * has S-mode. Clobbers t0. */
+.macro CZ_ENVCFG m, s
+    li      t0, CZ_CBZE
+    .if \m
+    csrs    menvcfg, t0
+    .else
+    csrc    menvcfg, t0
+    .endif
+    beqz    s8, .Lcz_env_nos\@
+    .if \s
+    csrs    senvcfg, t0
+    .else
+    csrc    senvcfg, t0
+    .endif
+.Lcz_env_nos\@:
+.endm
+
+/* T_CZ_U m, s, trap, s_cause, s_mepc, s_scan -- with CBZE = m / s,
+ * CBO.ZERO on B1 in U-mode (MPP = U, MPIE = 0, MRET), an ECALL after
+ * it. trap = 1: it must trap (mcause 2, mepc on it, buffer untouched);
+ * 0: it must not (the ECALL traps: mcause 8, mepc on the ECALL, B1
+ * zeroed); S: trap = misa.S. Both ways end in the armed handler, so
+ * neither can hang. */
+.macro T_CZ_U m, s, trap, s_cause, s_mepc, s_scan
+    TEST_BEGIN \s_cause
+    CZ_ENVCFG \m, \s
+    jal     ra, cz_fill
+    CZ_LA   s1, cz_buf+CZ_B
+    CZ_LA   s2, .Lczu_at\@
+    CZ_LA   s3, .Lczu_ecall\@
+    TRAP_ARM .Lczu_back\@
+    li      t0, MSTATUS_MPP | MSTATUS_MPIE
+    csrc    mstatus, t0
+    csrw    mepc, s2
+    mret
+.Lczu_at\@:
+    cbo.zero (s1)                   /* in U-mode */
+.Lczu_ecall\@:
+    ecall
+.Lczu_back\@:
+    TRAP_DISARM
+    jal     ra, cz_scan
+    mv      s4, t6
+    .ifc \trap, S
+    mv      s5, s8
+    .else
+    li      s5, \trap
+    .endif
+    /* expected: s5 != 0 -> 2 / the CBO.ZERO / untouched,
+     *           s5 == 0 -> 8 / the ECALL / B1 zeroed */
+    li      a1, 2
+    bnez    s5, 1f
+    li      a1, 8
+1:  TRAP_LD a2, mcause
+    la      a0, \s_cause
+    call    check
+    TEST_BEGIN \s_mepc
+    mv      a1, s2
+    bnez    s5, 1f
+    mv      a1, s3
+1:  TRAP_LD a2, mepc
+    la      a0, \s_mepc
+    call    check
+    TEST_BEGIN \s_scan
+    mv      a1, s11
+    bnez    s5, 1f
+    CZ_EXPV a1, CZ_B, 2*CZ_B
+1:  mv      a2, s4
+    la      a0, \s_scan
+    call    check
+.endm
+
+test_cz_envcfg:
+    addi    sp, sp, -16
+    REG_S   ra, 0(sp)
+
+    csrr    s8, misa
+    li      t0, 1 << 18             /* misa.S */
+    and     s8, s8, t0
+    csrr    s9, menvcfg
+    li      s10, 0
+    beqz    s8, 1f
+    csrr    s10, senvcfg
+1:  jal     ra, cz_fill
+    jal     ra, cz_scan
+    mv      s11, t6
+
+    T_CZ_U  1, 1, 0, str_cz_env_on_cause, str_cz_env_on_mepc, str_cz_env_on_scan
+    T_CZ_U  0, 1, 1, str_cz_env_m0_cause, str_cz_env_m0_mepc, str_cz_env_m0_scan
+    T_CZ_U  1, 0, S, str_cz_env_s0_cause, str_cz_env_s0_mepc, str_cz_env_s0_scan
+
+    /* --- M-mode ignores CBZE: both clear, still zeroes --- */
+    CZ_ENVCFG 0, 0
+    T_CZ_OFF CZ_B, CZ_B, 2*CZ_B, str_cz_env_m_mode
+
+    csrw    menvcfg, s9
+    beqz    s8, 1f
+    csrw    senvcfg, s10
+1:
+    REG_L   ra, 0(sp)
+    addi    sp, sp, 16
+    ret
+
 /* Bit independence across fields -- see the file header, BX_C_CZ and
  * bitx.inc. rs1 is the only variable field: its ten two-bit registers
  * (x3 = gp among them). */
@@ -551,6 +675,16 @@ str_cz_st_after_rest: .asciz "CBO.ZERO then store: rest of the block still zero"
 str_cz_amo_old:       .asciz "CBO.ZERO then AMOADD.W: old value is 0"
 str_cz_amo_new:       .asciz "CBO.ZERO then AMOADD.W: memory holds the sum"
 str_cz_regs:          .asciz "CBO.ZERO leaves registers unchanged"
+str_cz_env_on_cause:  .asciz "CBO.ZERO in U-mode, m/senvcfg.CBZE=1: no trap (mcause == 8, the ECALL after it)"
+str_cz_env_on_mepc:   .asciz "CBO.ZERO in U-mode, m/senvcfg.CBZE=1: mepc == the ECALL after it"
+str_cz_env_on_scan:   .asciz "CBO.ZERO in U-mode, m/senvcfg.CBZE=1: block zeroed"
+str_cz_env_m0_cause:  .asciz "CBO.ZERO in U-mode, menvcfg.CBZE=0: mcause == 2 (illegal instruction)"
+str_cz_env_m0_mepc:   .asciz "CBO.ZERO in U-mode, menvcfg.CBZE=0: mepc == the CBO.ZERO"
+str_cz_env_m0_scan:   .asciz "CBO.ZERO in U-mode, menvcfg.CBZE=0: memory untouched"
+str_cz_env_s0_cause:  .asciz "CBO.ZERO in U-mode, senvcfg.CBZE=0: illegal iff S-mode (mcause 2, else 8)"
+str_cz_env_s0_mepc:   .asciz "CBO.ZERO in U-mode, senvcfg.CBZE=0: mepc == the CBO.ZERO iff S-mode"
+str_cz_env_s0_scan:   .asciz "CBO.ZERO in U-mode, senvcfg.CBZE=0: untouched iff S-mode, else zeroed"
+str_cz_env_m_mode:    .asciz "CBO.ZERO in M-mode, m/senvcfg.CBZE=0: block zeroed"
 
 /* =======================================================================
  *  Buffers

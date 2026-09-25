@@ -5,17 +5,16 @@
 # (a bare-metal riscv64-unknown-elf- toolchain works too; just adjust
 # CROSS below)
 #
-# Builds two images from the same sources: build/rv64/rvc_test.{elf,bin}
-# (RV64IMAC) and build/rv32/rvc_test.{elf,bin} (RV32IMAC). All build
+# Builds two images from the same sources: build/rv64/rv_tests.{elf,bin}
+# (RV64IMAC) and build/rv32/rv_tests.{elf,bin} (RV32IMAC). All build
 # outputs (object files, the linked ELFs, and the flat binaries) are
 # placed under BUILD_DIR (default: build/), which is created
 # automatically if it doesn't exist; object files mirror the source tree
 # (src/c/tests.S -> build/rv64/c/tests.o, ...). All sources live
 # under SRC_DIR (default: src/): the shared harness and include files
 # directly in it, and each suite's files in its own subdirectory
-# (c/, i/, m/, a/, zicsr/, zifencei/, zicboz/, zabha/, priv/). The paths
-# below are
-# relative to src/.
+# (c/, i/, m/, a/, zicsr/, zifencei/, zicboz/, zabha/, priv/).
+# The paths below are relative to src/.
 #
 # Source layout (under src/):
 #   common.S         - reusable boot/UART/reporter harness, suite-agnostic.
@@ -46,6 +45,7 @@
 #   i/op_imm32.S      - ADDIW, SLLIW, SRLIW, SRAIW (RV64-only)
 #   i/op_alu32.S      - ADDW, SUBW, SLLW, SRLW, SRAW (RV64-only)
 #   i/system.S        - ECALL, EBREAK
+#   i/fence.S         - FENCE (incl. FENCE.TSO, PAUSE)
 #   m/tests.S         - RV64M suite orchestrator; defines run_m_tests,
 #                       calls tests_m_mul/tests_m_div
 #   m/mul.S           - MUL, MULH, MULHSU, MULHU, MULW
@@ -70,11 +70,17 @@
 #                       run_zabha_tests, calls tests_zabha_amo
 #   zabha/amo.S       - AMOSWAP, AMOADD, AMOXOR, AMOAND, AMOOR, AMOMIN,
 #                       AMOMAX, AMOMINU, AMOMAXU (.B and .H)
-#   priv/tests.S      - privileged-instruction suite orchestrator;
-#                       defines run_priv_tests, calls tests_priv_mret/
-#                       tests_priv_wfi
+#   priv/tests.S      - privileged suite orchestrator; defines
+#                       run_priv_tests, calls tests_priv_mret/
+#                       tests_priv_wfi/tests_priv_csrpriv/
+#                       tests_priv_irqpriv/tests_priv_mstatus
 #   priv/mret.S       - MRET
 #   priv/wfi.S        - WFI
+#   priv/csrpriv.S    - M-mode CSRs accessed from U-mode
+#   priv/irqpriv.S    - M-mode interrupts while in U-mode; vectored
+#                       mtvec, interrupt priority
+#   priv/mstatus.S    - mstatus MPP/UXL legality, misa.U, trap-entry
+#                       stack from U-mode
 #   xlen.inc          - the RV64/RV32 switch every file includes first
 #   harness.inc       - TEST_BEGIN, which prints a test's name before it
 #                       runs, and the TRAP_* macros for tests that trap
@@ -109,13 +115,14 @@ ABI32   = ilp32
 EMU32   = elf32lriscv
 QEMU32  = qemu-system-riscv32
 # QEMU's rv64/rv32 CPUs leave Zabha off by default; without it every
-# Zabha check FAILs (it traps; see README "Unimplemented instructions
-# fail, they don't hang").
+# Zabha check FAILs (it traps; see README
+# "Unimplemented instructions fail, they don't hang").
 QCPU64  = rv64,zabha=true
 QCPU32  = rv32,zabha=true
 # All sources live under SRC_DIR. -I $(SRC_DIR): the category files sit
-# in subdirectories (c/, i/, m/, a/, zicsr/, zifencei/, zicboz/, zabha/, priv/) but
-# .include the shared xlen.inc/harness.inc/bitx.inc from SRC_DIR itself.
+# in subdirectories (c/, i/, m/, a/, zicsr/, zifencei/, zicboz/, zabha/,
+# priv/) but .include the shared xlen.inc/harness.inc/bitx.inc
+# from SRC_DIR itself.
 SRC_DIR = src
 ASFLAGS = --fatal-warnings -I $(SRC_DIR)
 
@@ -126,22 +133,22 @@ BUILD_DIR   = build
 # lands at the very base of .text, i.e. at the 0x80000000 load address.
 COMMON_SRC  = common.S
 SUITE_SRCS  = main_tests.S c/tests.S c/quadrant0.S c/quadrant1.S c/quadrant2.S \
-              i/tests.S i/loads.S i/stores.S i/lui.S i/auipc.S i/jal.S i/jalr.S i/branches.S i/op_alu.S i/op_imm.S i/op_imm32.S i/op_alu32.S i/system.S \
+              i/tests.S i/loads.S i/stores.S i/lui.S i/auipc.S i/jal.S i/jalr.S i/branches.S i/op_alu.S i/op_imm.S i/op_imm32.S i/op_alu32.S i/system.S i/fence.S \
               m/tests.S m/mul.S m/div.S \
               a/tests.S a/amo.S a/lrsc.S \
               zicsr/tests.S zicsr/reg.S zicsr/imm.S \
               zifencei/tests.S zifencei/fencei.S \
               zicboz/tests.S zicboz/cbozero.S \
               zabha/tests.S zabha/amo.S \
-              priv/tests.S priv/mret.S priv/wfi.S \
+              priv/tests.S priv/mret.S priv/wfi.S priv/csrpriv.S priv/irqpriv.S priv/mstatus.S \
               bitx.S
 SRCS        = $(COMMON_SRC) $(SUITE_SRCS)
 INCS        = $(addprefix $(SRC_DIR)/,xlen.inc harness.inc bitx.inc)
 
 OBJS64      = $(addprefix $(BUILD_DIR)/rv64/,$(SRCS:.S=.o))
 OBJS32      = $(addprefix $(BUILD_DIR)/rv32/,$(SRCS:.S=.o))
-OUT64       = $(BUILD_DIR)/rv64/rvc_test
-OUT32       = $(BUILD_DIR)/rv32/rvc_test
+OUT64       = $(BUILD_DIR)/rv64/rv_tests
+OUT32       = $(BUILD_DIR)/rv32/rv_tests
 
 all: $(OUT64).bin $(OUT32).bin
 

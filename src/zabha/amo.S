@@ -76,7 +76,7 @@
  *
  * Not tested: misaligned .H (it traps, or with Zama16B may succeed
  * inside a 16-byte block: implementation-dependent), and AMOCAS.B/
- * AMOCAS.H, which need Zacas as well.
+ * AMOCAS.H (they need Zacas as well).
  *
  * Bit independence across fields (bitx_zabha_amo, at the end): every
  * bit pair among rd/rs1/rs2 and the aq/rl bits, C(17,2) = 136 cases per
@@ -974,45 +974,45 @@ bitx_zabha_amo:
  *  cases inline, see the file header)
  * ======================================================================= */
     .section .rodata
-str_zb_rd_ra:  .asciz "Zabha AMO rd=ra(x1) (via AMOADD.B)"
-str_zb_rd_t0:  .asciz "Zabha AMO rd=t0(x5) (via AMOADD.B)"
-str_zb_rd_s0:  .asciz "Zabha AMO rd=s0(x8) (via AMOADD.B)"
-str_zb_rd_a0:  .asciz "Zabha AMO rd=a0(x10) (via AMOADD.B)"
-str_zb_rd_s10: .asciz "Zabha AMO rd=s10(x26) (via AMOADD.B)"
-str_zb_rd_t6:  .asciz "Zabha AMO rd=t6(x31) (via AMOADD.B)"
-str_zb_rs1_ra:  .asciz "Zabha AMO rs1=ra(x1) (via AMOADD.B)"
-str_zb_rs1_t0:  .asciz "Zabha AMO rs1=t0(x5) (via AMOADD.B)"
-str_zb_rs1_s0:  .asciz "Zabha AMO rs1=s0(x8) (via AMOADD.B)"
-str_zb_rs1_a0:  .asciz "Zabha AMO rs1=a0(x10) (via AMOADD.B)"
-str_zb_rs1_s10: .asciz "Zabha AMO rs1=s10(x26) (via AMOADD.B)"
-str_zb_rs1_t6:  .asciz "Zabha AMO rs1=t6(x31) (via AMOADD.B)"
-str_zb_rs2_ra:  .asciz "Zabha AMO rs2=ra(x1) (via AMOADD.B)"
-str_zb_rs2_t0:  .asciz "Zabha AMO rs2=t0(x5) (via AMOADD.B)"
-str_zb_rs2_s0:  .asciz "Zabha AMO rs2=s0(x8) (via AMOADD.B)"
-str_zb_rs2_a0:  .asciz "Zabha AMO rs2=a0(x10) (via AMOADD.B)"
-str_zb_rs2_s10: .asciz "Zabha AMO rs2=s10(x26) (via AMOADD.B)"
-str_zb_rs2_t6:  .asciz "Zabha AMO rs2=t6(x31) (via AMOADD.B)"
-str_zb_rs1_sp_rd:  .asciz "Zabha AMO rs1=sp(x2) (via AMOADD.B): rd = old value"
-str_zb_rs1_sp_mem: .asciz "Zabha AMO rs1=sp(x2) (via AMOADD.B): memory"
-str_zb_rd_x0: .asciz "Zabha AMO rd=x0 still updates memory (via AMOADD.B)"
+str_zb_rd_ra:  .asciz "AMOADD.B rd=ra(x1) (Zabha AMO format)"
+str_zb_rd_t0:  .asciz "AMOADD.B rd=t0(x5) (Zabha AMO format)"
+str_zb_rd_s0:  .asciz "AMOADD.B rd=s0(x8) (Zabha AMO format)"
+str_zb_rd_a0:  .asciz "AMOADD.B rd=a0(x10) (Zabha AMO format)"
+str_zb_rd_s10: .asciz "AMOADD.B rd=s10(x26) (Zabha AMO format)"
+str_zb_rd_t6:  .asciz "AMOADD.B rd=t6(x31) (Zabha AMO format)"
+str_zb_rs1_ra:  .asciz "AMOADD.B rs1=ra(x1) (Zabha AMO format)"
+str_zb_rs1_t0:  .asciz "AMOADD.B rs1=t0(x5) (Zabha AMO format)"
+str_zb_rs1_s0:  .asciz "AMOADD.B rs1=s0(x8) (Zabha AMO format)"
+str_zb_rs1_a0:  .asciz "AMOADD.B rs1=a0(x10) (Zabha AMO format)"
+str_zb_rs1_s10: .asciz "AMOADD.B rs1=s10(x26) (Zabha AMO format)"
+str_zb_rs1_t6:  .asciz "AMOADD.B rs1=t6(x31) (Zabha AMO format)"
+str_zb_rs2_ra:  .asciz "AMOADD.B rs2=ra(x1) (Zabha AMO format)"
+str_zb_rs2_t0:  .asciz "AMOADD.B rs2=t0(x5) (Zabha AMO format)"
+str_zb_rs2_s0:  .asciz "AMOADD.B rs2=s0(x8) (Zabha AMO format)"
+str_zb_rs2_a0:  .asciz "AMOADD.B rs2=a0(x10) (Zabha AMO format)"
+str_zb_rs2_s10: .asciz "AMOADD.B rs2=s10(x26) (Zabha AMO format)"
+str_zb_rs2_t6:  .asciz "AMOADD.B rs2=t6(x31) (Zabha AMO format)"
+str_zb_rs1_sp_rd:  .asciz "AMOADD.B rs1=sp(x2) (Zabha AMO format): rd = old value"
+str_zb_rs1_sp_mem: .asciz "AMOADD.B rs1=sp(x2) (Zabha AMO format): memory"
+str_zb_rd_x0: .asciz "AMOADD.B rd=x0 still updates memory (Zabha AMO format)"
 str_zb_swap_rs2_x0_rd:  .asciz "AMOSWAP.B rs2=x0: rd = old value"
 str_zb_swap_rs2_x0_mem: .asciz "AMOSWAP.B rs2=x0: memory = 0"
 str_zb_or_rs2_x0_rd:    .asciz "AMOOR.B rs2=x0 (atomic byte load): rd = old value, sign-extended"
 str_zb_or_rs2_x0_mem:   .asciz "AMOOR.B rs2=x0 (atomic byte load): memory unchanged"
 str_zb_swap_rd_rs2_rd:  .asciz "AMOSWAP.H rd==rs2 swaps reg and memory: rd = old memory"
 str_zb_swap_rd_rs2_mem: .asciz "AMOSWAP.H rd==rs2 swaps reg and memory: memory = old rs2"
-str_zb_alias_rd_rs2_rd:  .asciz "Zabha AMO rd==rs2 (via AMOADD.B): rd = old value"
-str_zb_alias_rd_rs2_mem: .asciz "Zabha AMO rd==rs2 (via AMOADD.B): memory = old + old rs2"
-str_zb_alias_rd_rs1_rd:  .asciz "Zabha AMO rd==rs1 (via AMOADD.B): rd = old value"
-str_zb_alias_rd_rs1_mem: .asciz "Zabha AMO rd==rs1 (via AMOADD.B): memory at the old rs1"
+str_zb_alias_rd_rs2_rd:  .asciz "AMOADD.B rd==rs2 (Zabha AMO format): rd = old value"
+str_zb_alias_rd_rs2_mem: .asciz "AMOADD.B rd==rs2 (Zabha AMO format): memory = old + old rs2"
+str_zb_alias_rd_rs1_rd:  .asciz "AMOADD.B rd==rs1 (Zabha AMO format): rd = old value"
+str_zb_alias_rd_rs1_mem: .asciz "AMOADD.B rd==rs1 (Zabha AMO format): memory at the old rs1"
 str_zb_alias_rs1_rs2_rd:  .asciz "AMOSWAP.B rs1==rs2: rd = old value"
 str_zb_alias_rs1_rs2_mem: .asciz "AMOSWAP.B rs1==rs2: memory = its own address's low byte"
 str_zb_alias_rs1_rs2_add_rd:  .asciz "AMOADD.H rs1==rs2: rd = old value"
 str_zb_alias_rs1_rs2_add_mem: .asciz "AMOADD.H rs1==rs2: memory = old + address's low halfword"
 str_zb_alias_all_same_rd:  .asciz "AMOSWAP.H rd==rs1==rs2: rd = old value"
 str_zb_alias_all_same_mem: .asciz "AMOSWAP.H rd==rs1==rs2: memory = its own address's low halfword"
-str_zb_rs1_preserved: .asciz "Zabha AMO rs1 unmodified (via AMOADD.B)"
-str_zb_rs2_preserved: .asciz "Zabha AMO rs2 unmodified (via AMOADD.B)"
+str_zb_rs1_preserved: .asciz "AMOADD.B rs1 unmodified (Zabha AMO format)"
+str_zb_rs2_preserved: .asciz "AMOADD.B rs2 unmodified (Zabha AMO format)"
 
 /* =======================================================================
  *  Data

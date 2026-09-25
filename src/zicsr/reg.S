@@ -36,13 +36,18 @@
  *     read-only mhartid/mvendorid/marchid/mimpid (a write would raise an
  *     illegal-instruction exception, which common.S reports as UNEXPECTED
  *     TRAP) and agree with each other;
+ *   - ... and a write does trap, even in M-mode: CSRRW (with rd and with
+ *     rd=x0), and CSRRS/CSRRC with a non-x0 rs1 register that holds 0,
+ *     on the read-only mvendorid/marchid/mimpid/mhartid, each raise an
+ *     illegal-instruction exception (mcause 2, mepc on the instruction,
+ *     mtval 0 or its bits) and leave rd unwritten. These run armed
+ *     (harness.inc), so a write that wrongly goes through is a FAIL;
  *   - misa: MXL matches the image's XLEN, and I, M, A and C are set.
- * Not tested: that writing a read-only CSR (or CSRRS/CSRRC with a
- * nonzero rs1 register holding 0) traps, since the trap handler only
- * expects EBREAK; the side effects of reads, which mscratch doesn't
- * have; and mepc's WARL rule that mepc[0] reads as 0 -- QEMU 10.0 keeps
- * the written bit and only clears it on MRET, so mepc only ever gets
- * even values here.
+ * Not tested: an access to a CSR address that isn't implemented (no
+ * address is guaranteed unimplemented on every hart); the side effects
+ * of reads, which mscratch doesn't have; and mepc's WARL rule that
+ * mepc[0] reads as 0 -- QEMU 10.0 keeps the written bit and only clears
+ * it on MRET, so mepc only ever gets even values here.
  *
  * Bit independence across fields (bitx_zicsr_reg, at the end): rd and
  * rs1, C(10,2) = 45 cases per instruction, each checking rd and
@@ -235,6 +240,81 @@
     BX_REPORT "\nm bitx rd=x\rd rs1=x\rs1 csr"
 .endm
 
+/* T_CSR_RO rd, desc, insn... -- \insn writes a read-only M-mode CSR
+ * (CSRRW, or CSRRS/CSRRC with rs1 = a4), in M-mode, with rd = a3 when rd = 1 and a4 = 0: it must
+ * raise an illegal-instruction exception whatever the value written,
+ * and leave rd alone. Run armed (TRAP_ARM, harness.inc), so a write
+ * that wrongly goes through falls through to a FAIL, never a hang.
+ * trap_mcause is set to -1 first so a stale record can't pass the
+ * cause check. Checks: exactly one trap, mcause 2, mepc on the
+ * instruction, mtval 0 or its bits, rd unchanged. Uses s2-s4, clobbers
+ * t0-t3, a3, a4. */
+.macro T_CSR_RO rd, desc, insn:vararg
+    .pushsection .rodata
+.Lro_once\@:  .asciz "\desc: traps exactly once"
+.Lro_cause\@: .asciz "\desc: mcause == 2 (illegal instruction)"
+.Lro_mepc\@:  .asciz "\desc: mepc == the instruction"
+.Lro_mtval\@: .asciz "\desc: mtval == 0 or the instruction"
+    .if \rd
+.Lro_rd\@:    .asciz "\desc: rd not written"
+    .endif
+    .popsection
+    TEST_BEGIN .Lro_once\@
+    .option push
+    .option norelax
+    lw      s3, trap_count
+    la      s2, .Lro_at\@
+    la      t0, trap_mcause
+    .option pop
+    li      t1, -1
+    REG_S   t1, 0(t0)
+    li      a4, 0
+    LIXT    a3, 0x5ac3a55a3cc3a5c3
+    TRAP_ARM .Lro_back\@
+.Lro_at\@:
+    \insn
+    TRAP_DISARM                     /* no trap: disarm, then FAIL */
+.Lro_back\@:
+    mv      s4, a3
+    .option push
+    .option norelax
+    lw      t0, trap_count
+    .option pop
+    sub     s3, t0, s3
+    la      a0, .Lro_once\@
+    li      a1, 1
+    mv      a2, s3
+    call    check
+    TEST_BEGIN .Lro_cause\@
+    TRAP_LD t2, mcause
+    la      a0, .Lro_cause\@
+    li      a1, 2
+    mv      a2, t2
+    call    check
+    TEST_BEGIN .Lro_mepc\@
+    TRAP_LD t2, mepc
+    la      a0, .Lro_mepc\@
+    mv      a1, s2
+    mv      a2, t2
+    call    check
+    TEST_BEGIN .Lro_mtval\@
+    TRAP_LD t2, mtval
+    li      t3, 0
+    beqz    t2, 1f
+    LWUX    t3, 0(s2)
+1:  la      a0, .Lro_mtval\@
+    mv      a1, t3
+    mv      a2, t2
+    call    check
+    .if \rd
+    TEST_BEGIN .Lro_rd\@
+    la      a0, .Lro_rd\@
+    LIXT    a1, 0x5ac3a55a3cc3a5c3
+    mv      a2, s4
+    call    check
+    .endif
+.endm
+
 tests_zicsr_reg:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
@@ -243,6 +323,7 @@ tests_zicsr_reg:
     jal     ra, test_csr_values
     jal     ra, test_csr_order
     jal     ra, test_csr_select
+    jal     ra, test_csr_ro_write
 
     jal     ra, bitx_zicsr_reg
 
@@ -527,6 +608,22 @@ test_csr_select:
 /* Bit independence across fields -- see the file header, BX_C_CSR and
  * bitx.inc. rd background t2 (x7), rs1 background t3 (x28); csr fixed
  * at mscratch. */
+/* =======================================================================
+ *  Writes to read-only CSRs trap, in M-mode too
+ * ======================================================================= */
+test_csr_ro_write:
+    addi    sp, sp, -16
+    REG_S   ra, 0(sp)
+
+    T_CSR_RO 1, "CSRRW rd, mvendorid, rs1 (M-mode)", csrrw a3, mvendorid, a4
+    T_CSR_RO 0, "CSRRW x0, mhartid, rs1 (M-mode)", csrrw x0, mhartid, a4
+    T_CSR_RO 1, "CSRRS rd, marchid, rs1 holding 0 (M-mode)", csrrs a3, marchid, a4
+    T_CSR_RO 1, "CSRRC rd, mimpid, rs1 holding 0 (M-mode)", csrrc a3, mimpid, a4
+
+    REG_L   ra, 0(sp)
+    addi    sp, sp, 16
+    ret
+
 bitx_zicsr_reg:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
@@ -607,16 +704,16 @@ str_csr_sc_final:       .asciz "CSRRS then CSRRC: CSR = set, then cleared"
 str_csr_rd_fwd:         .asciz "CSRRW rd used by the next instruction"
 str_csr_rs1_fwd:        .asciz "CSRRS rs1 written by the previous instruction"
 
-str_csr_sel_mscratch:   .asciz "csr field: mscratch keeps its value after a mepc write"
-str_csr_sel_mepc:       .asciz "csr field: mepc holds its own value"
-str_csr_sel_mepc2:      .asciz "csr field: mepc keeps its value after a mscratch write"
-str_csr_ro_mhartid:     .asciz "CSRRS/CSRRC rs1=x0 read mhartid, no trap, agree"
-str_csr_ro_mvendorid:   .asciz "CSRRS/CSRRC rs1=x0 read mvendorid, no trap, agree"
-str_csr_ro_marchid:     .asciz "CSRRS/CSRRC rs1=x0 read marchid, no trap, agree"
-str_csr_ro_mimpid:      .asciz "CSRRS/CSRRC rs1=x0 read mimpid, no trap, agree"
+str_csr_sel_mscratch:   .asciz "CSRRW csr field: mscratch keeps its value after a mepc write"
+str_csr_sel_mepc:       .asciz "CSRRW csr field: mepc holds its own value"
+str_csr_sel_mepc2:      .asciz "CSRRW csr field: mepc keeps its value after a mscratch write"
+str_csr_ro_mhartid:     .asciz "CSRRS rs1=x0 read mhartid, no trap, CSRRC agrees"
+str_csr_ro_mvendorid:   .asciz "CSRRS rs1=x0 read mvendorid, no trap, CSRRC agrees"
+str_csr_ro_marchid:     .asciz "CSRRS rs1=x0 read marchid, no trap, CSRRC agrees"
+str_csr_ro_mimpid:      .asciz "CSRRS rs1=x0 read mimpid, no trap, CSRRC agrees"
     .if XLEN == 64
-str_csr_misa_mxl:       .asciz "misa.MXL = 2 (RV64)"
+str_csr_misa_mxl:       .asciz "CSRRS reads misa.MXL = 2 (RV64)"
     .else
-str_csr_misa_mxl:       .asciz "misa.MXL = 1 (RV32)"
+str_csr_misa_mxl:       .asciz "CSRRS reads misa.MXL = 1 (RV32)"
     .endif
-str_csr_misa_imac:      .asciz "misa reports I, M, A, C"
+str_csr_misa_imac:      .asciz "CSRRS reads misa: reports I, M, A, C"

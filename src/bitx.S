@@ -40,9 +40,10 @@
  * are in bitx.inc (BX_PLANT / BX_GO / BX_COUNT).
  *
  * The region is ~1 MiB of .bss, so it costs nothing in the flat binary
- * but does need that much RAM after the image. It's rebuilt only once
- * (bx_sled_init is idempotent); the tests re-plant only the site they
- * use.
+ * but does need that much RAM after the image. It's built only once:
+ * bx_ready (.bss, so zeroed by common.S's reset -- never by the loader)
+ * makes bx_sled_init idempotent, and the tests re-plant only the site
+ * they use.
  * ===================================================================== */
 
     .include "xlen.inc"

@@ -30,9 +30,11 @@
  * this memory map and there's no access-fault handler, so it would
  * hang rather than usefully fail.
  *
- * Offsets are not constrained to natural alignment for the width being
- * stored -- see i/loads.S's header and the README for the same
- * caveat about misaligned-access portability to real hardware.
+ * Every access is naturally aligned: the offset tests move the base
+ * register instead (base = anchor - (off mod width)), so +2047 and the
+ * other odd offsets are still encoded but the address they produce is
+ * aligned. A hart without misaligned-access support runs the suite
+ * unchanged.
  *
  * Bit independence across fields (bitx_i_stores, called last): every
  * bit pair among rs2, rs1 and the split 12-bit offset set together,
@@ -78,6 +80,15 @@
     BX_REPORT "\nm bitx rs2=x\rs2 rs1=x\rs1 off=\v"
 .endm
 
+/* Every store test first sets its target to a different value with a
+ * store of another encoding (rs2 = x0, or the complement of the value
+ * under test), so a store that doesn't happen can't pass on what an
+ * earlier test left there. The _OFF tests reach the target through an
+ * absolute address (t3) for that and for the read-back, and adjust the
+ * base so the target stays naturally aligned (base = anchor - (off mod
+ * width)): the offset field is then the only thing that puts the
+ * store in the right place, and no access is misaligned. */
+
 /* =======================================================================
  *  Shared macros, byte width (SB)
  * ======================================================================= */
@@ -87,35 +98,40 @@
                                       * swept rs2reg candidates, and using
                                       * s0 here would destroy the address
                                       * just computed when rs2reg==s0 */
-    LIX     \rs2reg, 0xaa
+    sb      zero, 0(s1)
+    LIX    \rs2reg, 0xaa
     sb      \rs2reg, 0(s1)
     lbu     t2, 0(s1)
     la      a0, \name
-    LIX     a1, 0x00000000000000aa
+    LIX    a1, 0x00000000000000aa
     mv      a2, t2
     call    check
 .endm
 
 .macro T_SB_RS1 basereg, name
     TEST_BEGIN \name
+    la      t1, store_anchor        /* t1: not a basereg candidate */
+    sb      zero, 0(t1)
     la      \basereg, store_anchor
-    LIX     a4, 0xaa
+    LIX    a4, 0xaa
     sb      a4, 0(\basereg)
     lbu     t2, 0(\basereg)
     la      a0, \name
-    LIX     a1, 0x00000000000000aa
+    LIX    a1, 0x00000000000000aa
     mv      a2, t2
     call    check
 .endm
 
 .macro T_SB_OFF off, name
     TEST_BEGIN \name
-    la      s0, store_anchor
-    LIX     a4, 0xaa
+    la      t3, store_anchor + (\off) - ((\off) & 0)
+    sb      zero, 0(t3)
+    la      s0, store_anchor - ((\off) & 0)
+    LIX    a4, 0xaa
     sb      a4, \off(s0)
-    lbu     t2, \off(s0)
+    lbu     t2, 0(t3)
     la      a0, \name
-    LIX     a1, 0x00000000000000aa
+    LIX    a1, 0x00000000000000aa
     mv      a2, t2
     call    check
 .endm
@@ -124,6 +140,8 @@
     TEST_BEGIN \name
     la      s0, store_anchor
     LIX     a4, \rawval
+    not     t1, a4
+    sb      t1, 0(s0)
     sb      a4, 0(s0)
     lbu     t2, 0(s0)
     la      a0, \name
@@ -138,35 +156,40 @@
 .macro T_SH_RS2 rs2reg, name
     TEST_BEGIN \name
     la      s1, store_anchor        /* s1, not s0 -- see T_SB_RS2 */
-    LIX     \rs2reg, 0xaaaa
+    sh      zero, 0(s1)
+    LIX    \rs2reg, 0xaaaa
     sh      \rs2reg, 0(s1)
     lhu     t2, 0(s1)
     la      a0, \name
-    LIX     a1, 0x000000000000aaaa
+    LIX    a1, 0x000000000000aaaa
     mv      a2, t2
     call    check
 .endm
 
 .macro T_SH_RS1 basereg, name
     TEST_BEGIN \name
+    la      t1, store_anchor        /* t1: not a basereg candidate */
+    sh      zero, 0(t1)
     la      \basereg, store_anchor
-    LIX     a4, 0xaaaa
+    LIX    a4, 0xaaaa
     sh      a4, 0(\basereg)
     lhu     t2, 0(\basereg)
     la      a0, \name
-    LIX     a1, 0x000000000000aaaa
+    LIX    a1, 0x000000000000aaaa
     mv      a2, t2
     call    check
 .endm
 
 .macro T_SH_OFF off, name
     TEST_BEGIN \name
-    la      s0, store_anchor
-    LIX     a4, 0xaaaa
+    la      t3, store_anchor + (\off) - ((\off) & 1)
+    sh      zero, 0(t3)
+    la      s0, store_anchor - ((\off) & 1)
+    LIX    a4, 0xaaaa
     sh      a4, \off(s0)
-    lhu     t2, \off(s0)
+    lhu     t2, 0(t3)
     la      a0, \name
-    LIX     a1, 0x000000000000aaaa
+    LIX    a1, 0x000000000000aaaa
     mv      a2, t2
     call    check
 .endm
@@ -175,6 +198,8 @@
     TEST_BEGIN \name
     la      s0, store_anchor
     LIX     a4, \rawval
+    not     t1, a4
+    sh      t1, 0(s0)
     sh      a4, 0(s0)
     lhu     t2, 0(s0)
     la      a0, \name
@@ -189,35 +214,40 @@
 .macro T_SW_RS2 rs2reg, name
     TEST_BEGIN \name
     la      s1, store_anchor        /* s1, not s0 -- see T_SB_RS2 */
-    LIX     \rs2reg, 0xaaaaaaaa
+    sw      zero, 0(s1)
+    LIX    \rs2reg, 0xaaaaaaaa
     sw      \rs2reg, 0(s1)
     LWUX    t2, 0(s1)
     la      a0, \name
-    LIX     a1, 0x00000000aaaaaaaa
+    LIX    a1, 0x00000000aaaaaaaa
     mv      a2, t2
     call    check
 .endm
 
 .macro T_SW_RS1 basereg, name
     TEST_BEGIN \name
+    la      t1, store_anchor        /* t1: not a basereg candidate */
+    sw      zero, 0(t1)
     la      \basereg, store_anchor
-    LIX     a4, 0xaaaaaaaa
+    LIX    a4, 0xaaaaaaaa
     sw      a4, 0(\basereg)
     LWUX    t2, 0(\basereg)
     la      a0, \name
-    LIX     a1, 0x00000000aaaaaaaa
+    LIX    a1, 0x00000000aaaaaaaa
     mv      a2, t2
     call    check
 .endm
 
 .macro T_SW_OFF off, name
     TEST_BEGIN \name
-    la      s0, store_anchor
-    LIX     a4, 0xaaaaaaaa
+    la      t3, store_anchor + (\off) - ((\off) & 3)
+    sw      zero, 0(t3)
+    la      s0, store_anchor - ((\off) & 3)
+    LIX    a4, 0xaaaaaaaa
     sw      a4, \off(s0)
-    LWUX    t2, \off(s0)
+    LWUX    t2, 0(t3)
     la      a0, \name
-    LIX     a1, 0x00000000aaaaaaaa
+    LIX    a1, 0x00000000aaaaaaaa
     mv      a2, t2
     call    check
 .endm
@@ -226,6 +256,8 @@
     TEST_BEGIN \name
     la      s0, store_anchor
     LIX     a4, \rawval
+    not     t1, a4
+    sw      t1, 0(s0)
     sw      a4, 0(s0)
     LWUX    t2, 0(s0)
     la      a0, \name
@@ -240,6 +272,7 @@
 .macro T_SD_RS2 rs2reg, name
     TEST_BEGIN \name
     la      s1, store_anchor        /* s1, not s0 -- see T_SB_RS2 */
+    sd      zero, 0(s1)
     LIXT    \rs2reg, 0xaaaaaaaaaaaaaaaa
     sd      \rs2reg, 0(s1)
     ld      t2, 0(s1)
@@ -251,6 +284,8 @@
 
 .macro T_SD_RS1 basereg, name
     TEST_BEGIN \name
+    la      t1, store_anchor        /* t1: not a basereg candidate */
+    sd      zero, 0(t1)
     la      \basereg, store_anchor
     LIXT    a4, 0xaaaaaaaaaaaaaaaa
     sd      a4, 0(\basereg)
@@ -263,10 +298,12 @@
 
 .macro T_SD_OFF off, name
     TEST_BEGIN \name
-    la      s0, store_anchor
+    la      t3, store_anchor + (\off) - ((\off) & 7)
+    sd      zero, 0(t3)
+    la      s0, store_anchor - ((\off) & 7)
     LIXT    a4, 0xaaaaaaaaaaaaaaaa
     sd      a4, \off(s0)
-    ld      t2, \off(s0)
+    ld      t2, 0(t3)
     la      a0, \name
     LIXT    a1, 0xaaaaaaaaaaaaaaaa
     mv      a2, t2
@@ -277,6 +314,8 @@
     TEST_BEGIN \name
     la      s0, store_anchor
     LIX     a4, \rawval
+    not     t1, a4
+    sd      t1, 0(s0)
     sd      a4, 0(s0)
     ld      t2, 0(s0)
     la      a0, \name

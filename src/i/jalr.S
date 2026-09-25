@@ -225,8 +225,8 @@ tests_i_jalr:
      *     rather than the base register --- */
     LIX     s4, 0
     la      s3, 1f
-    addi    s3, s3, -3
-    jalr    zero, s3, 3             /* base+imm == target+1, low bit cleared */
+    addi    s3, s3, -2              /* even base ... */
+    jalr    zero, s3, 3             /* ... + odd imm == target+1: low bit cleared */
     LIX     s4, 999
 1:
     la      a0, str_jalr_lsb_cleared_imm
