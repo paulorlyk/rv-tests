@@ -27,6 +27,7 @@ run_zicsr_tests:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
+    call    insn_close          /* end the previous suite's last group */
     la      a0, str_zicsr_banner
     call    uart_puts
 

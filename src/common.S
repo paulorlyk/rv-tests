@@ -5,15 +5,17 @@
  * reusable boot + I/O + pass/fail-reporting infrastructure that any
  * instruction-set test suite can sit on top of:
  *
- *   - reset vector / M-mode entry at 0x80000000, gp/sp/mtvec setup
+ *   - reset vector / M-mode entry at 0x80000000, gp setup, .bss
+ *     zeroing, sp/mtvec setup
  *   - a minimal M-mode trap handler on a private stack (expects only
  *     C.EBREAK, reports and hangs on anything else -- unless a test has
  *     armed it with trap_resume, see below)
  *   - a FENCE.I probe at reset (has_fencei, for SYNC_I in harness.inc)
  *   - an ns16550a UART driver (init for 115200 8N1, putc/puts, hex/dec
  *     printing)
- *   - "check": a generic named pass/fail comparator that prints its
- *     verdict over the UART and tracks a running failure count, and
+ *   - "check": a generic named pass/fail comparator that prints
+ *     failures and one OK/FAIL per instruction over the UART (see
+ *     "Output format" below) and tracks a running failure count, and
  *     "check_trap", the FAIL for a check whose instruction trapped
  *   - the top-level summary/halt sequence; if anything failed, the
  *     summary lists the first FAIL_LOG_MAX failed checks with their
@@ -21,8 +23,9 @@
  *
  * It calls out to a single external entry point, run_tests, which the
  * actual test-suite file (e.g. c/tests.S) must define as .global.
- * run_tests should print its own banner, run whatever it wants (using
- * "check" to report each case), and ret when done -- fail_count will
+ * run_tests should print its own banner (after insn_close, which ends
+ * the previous suite's last instruction group), run whatever it wants
+ * (using "check" to report each case), and ret when done -- fail_count will
  * already reflect every check() call by then. This is the seam meant
  * for adding new suites later: a new test file just needs to provide
  * its own run_tests (and can freely reuse uart_puts/check/etc. from
@@ -105,6 +108,7 @@
     .global check
     .global check_trap
     .global test_begin
+    .global insn_close
     .global has_fencei
     .global fail_count
     .global pass_count
@@ -265,7 +269,13 @@ pmp_skip:
 trap_unexpected:
     .option push
     .option norelax
-    la      a0, str_unexpected_trap
+    la      t1, pending_name        /* the test that trapped, if it was */
+    REG_L   a0, 0(t1)               /* announced: "<name> - " first */
+    beqz    a0, 1f
+    jal     ra, uart_puts
+    la      a0, str_dots
+    jal     ra, uart_puts
+1:  la      a0, str_unexpected_trap
     jal     ra, uart_puts
     csrr    a0, mcause
     jal     ra, uart_put_hex64
@@ -290,10 +300,25 @@ reset:
     la      gp, __global_pointer$
     .option pop
 
+    /* Zero .bss (__bss_start .. _end, from the default linker script).
+     * It isn't part of the flat .bin (objcopy leaves NOBITS sections
+     * out), so on hardware it holds whatever RAM held at power-on: every
+     * counter, flag and buffer there -- fail_count, trap_resume,
+     * bitx.S's bx_ready -- must start from zero here, not from the
+     * loader. Both ends are 4-byte aligned. Nothing uses the stack (or
+     * any .bss) before this. */
+    la      t0, __bss_start
+    la      t1, _end
+1:  bgeu    t0, t1, 2f
+    sw      zero, 0(t0)
+    addi    t0, t0, 4
+    j       1b
+2:
+
     /* No interrupts until a test asks for one. mstatus.MIE resets to 0,
      * but mie's reset value is left to the implementation, so clear
-     * both: priv/wfi.S is the only file that enables a source, and it
-     * leaves mie = 0 again when it is done. */
+     * both: only priv/wfi.S and priv/irqpriv.S enable a source, and
+     * each leaves mie = 0 again when it is done. */
     csrci   mstatus, 0x8            /* mstatus.MIE = 0 */
     csrw    mie, zero
 
@@ -322,28 +347,6 @@ reset:
     csrw    pmpcfg0, t0
     la      t0, trap_handler
     csrw    mtvec, t0
-
-    li      t0, 0
-    la      t1, fail_count
-    sw      t0, 0(t1)
-    la      t1, pass_count
-    sw      t0, 0(t1)
-    la      t1, ebreak_flag
-    sw      t0, 0(t1)
-    la      t1, ebreak_mcause
-    sw      t0, 0(t1)
-    la      t1, ebreak_hit_count
-    sw      t0, 0(t1)
-    la      t1, ebreak_mepc
-    REG_S   t0, 0(t1)
-    la      t1, pending_name
-    REG_S   t0, 0(t1)
-    la      t1, trap_resume
-    REG_S   t0, 0(t1)
-    la      t1, trap_count
-    sw      t0, 0(t1)
-    la      t1, has_fencei
-    sw      t0, 0(t1)
 
     /* Probe FENCE.I once, through the armed handler: has_fencei = 1 if
      * it executes, stays 0 if it traps (no Zifencei). The shared bitx
@@ -374,6 +377,7 @@ reset:
 1:
 
     call    run_tests           /* provided by the test-suite file */
+    jal     ra, insn_close      /* end the last instruction group */
 
     la      a0, str_summary_pass
     jal     ra, uart_puts
@@ -444,7 +448,7 @@ uart_init:
     sb      t1, UART_MCR(t0)        /* assert DTR/RTS/OUT2 */
     ret
 
-/* uart_putc: a0 = character to send. Clobbers t0. */
+/* uart_putc: a0 = character to send. Clobbers t0, t1. */
 uart_putc:
     li      t0, UART_BASE
 1:  lb      t1, UART_LSR(t0)
@@ -533,50 +537,146 @@ uart_put_dec:
     ret
 
 /* ----------------------------------------------------------------------
+ * Output format. Results are reported per instruction, not per check:
+ *
+ *     ECALL:
+ *      OK
+ *     WFI:
+ *     WFI woken by the timer interrupt - FAIL
+ *      FAIL
+ *
+ * The instruction is the first word of a test's name (up to the first
+ * space, a trailing ':' or ',' dropped), so every name starts with the
+ * mnemonic it tests. When a test's instruction differs from the one
+ * before it, the open group is closed with " OK" or " FAIL" (FAIL if
+ * any of its checks failed) and "<INSN>:" opens the new one. A passing
+ * check prints nothing; a failing one prints its full line,
+ * "<name> - FAIL" (check_trap adds the mcause and mepc), inside its
+ * group. Groups follow run order, so an instruction whose tests are
+ * spread over several places (BEQ, CSRRS, ECALL) gets a group for each
+ * run of them. Anything else that prints -- a suite banner, the
+ * summary -- closes the open group first (insn_close).
+ * -------------------------------------------------------------------- */
+
+/* ----------------------------------------------------------------------
  * test_begin: announce a test before it runs.
  *   a0 = pointer to test-name string (NUL terminated, no newline)
- * Prints "<name> - " and remembers a0 as the pending name, so the
- * matching check() only has to add "OK"/"FAIL". If the test then traps
- * or hangs, its name is already the last thing on the UART. Preserves
- * every register except ra. Test code reaches it through the TEST_BEGIN
- * macro (harness.inc), which saves ra and a0 around the call, so it can
- * go anywhere sp is valid.
+ * Opens the name's instruction group ("<INSN>:") if it isn't the open
+ * one, and remembers a0 as the pending name until the matching check()
+ * reports it. If the test then takes an unexpected trap, the trap
+ * report starts with this name; if it hangs, its instruction group is
+ * the last line on the UART. Preserves every register except ra. Test
+ * code reaches it through the TEST_BEGIN macro (harness.inc), which
+ * saves ra and a0 around the call, so it can go anywhere sp is valid.
  * -------------------------------------------------------------------- */
 test_begin:
     addi    sp, sp, -32
     REG_S   ra, 0(sp)
-    REG_S   s0, 8(sp)
-    REG_S   t0, 16(sp)
-    REG_S   t1, 24(sp)
-    mv      s0, a0
-    jal     ra, pending_flush       /* an earlier test_begin never reached
-                                     * its check(): end that line first */
-    mv      a0, s0
-    jal     ra, uart_puts
-    la      a0, str_dots
-    jal     ra, uart_puts
+    REG_S   t0, 8(sp)
+    REG_S   t1, 16(sp)
+    REG_S   a0, 24(sp)
     la      t0, pending_name
-    REG_S   s0, 0(t0)
-    mv      a0, s0
+    REG_S   a0, 0(t0)
+    jal     ra, insn_track
     REG_L   ra, 0(sp)
-    REG_L   s0, 8(sp)
-    REG_L   t0, 16(sp)
-    REG_L   t1, 24(sp)
+    REG_L   t0, 8(sp)
+    REG_L   t1, 16(sp)
+    REG_L   a0, 24(sp)
     addi    sp, sp, 32
     ret
 
-/* pending_flush: if a test_begin is still pending (its name printed,
- * no verdict yet), end that line with "\r\n" and clear it. Clobbers
- * t0, t1, a0. */
-pending_flush:
-    la      t1, pending_name
+/* insn_key: a0 = test name. Returns a0 = the length of its instruction
+ * key: the first word (up to the first space or the NUL), less a
+ * trailing ':' or ','. Clobbers t0, t1. */
+insn_key:
+    mv      t1, a0
+1:  lbu     t0, 0(t1)
+    beqz    t0, 2f
+    addi    t0, t0, -' '
+    beqz    t0, 2f
+    addi    t1, t1, 1
+    j       1b
+2:  sub     a0, t1, a0
+    beqz    a0, 3f
+    lbu     t0, -1(t1)
+    addi    t0, t0, -':'
+    beqz    t0, 4f
+    addi    t0, t0, (':' - ',')
+    bnez    t0, 3f
+4:  addi    a0, a0, -1
+3:  ret
+
+/* insn_track: a0 = test name. If its instruction key differs from the
+ * open group's (insn_name/insn_len), close that group and open this
+ * one: print "<key>:\r\n" and clear insn_failed. Clobbers only t0, t1
+ * and a0 -- no more than check()'s pass path always did, which some
+ * tests have come to rely on (a value kept in t2 across a check). */
+insn_track:
+    addi    sp, sp, -48
+    REG_S   ra, 0(sp)
+    REG_S   s0, 8(sp)
+    REG_S   s1, 16(sp)
+    REG_S   s2, 24(sp)
+    REG_S   s3, 32(sp)
+    mv      s0, a0
+    jal     ra, insn_key
+    mv      s1, a0                  /* s0/s1 = the new key */
+    la      t1, insn_name
+    REG_L   s2, 0(t1)
+    beqz    s2, 2f                  /* no group open */
+    la      t1, insn_len
+    lw      t1, 0(t1)
+    bne     t1, s1, 2f
+    mv      a0, s0
+    mv      s3, s1
+1:  beqz    s3, 4f                  /* all bytes equal: same group */
+    lbu     t0, 0(s2)
+    lbu     t1, 0(a0)
+    bne     t0, t1, 2f
+    addi    s2, s2, 1
+    addi    a0, a0, 1
+    addi    s3, s3, -1
+    j       1b
+2:  jal     ra, insn_close
+    la      t0, insn_name
+    REG_S   s0, 0(t0)
+    la      t0, insn_len
+    sw      s1, 0(t0)
+    la      t0, insn_failed
+    sw      zero, 0(t0)
+3:  beqz    s1, 5f
+    lbu     a0, 0(s0)
+    jal     ra, uart_putc
+    addi    s0, s0, 1
+    addi    s1, s1, -1
+    j       3b
+5:  la      a0, str_insn_head
+    jal     ra, uart_puts
+4:  REG_L   ra, 0(sp)
+    REG_L   s0, 8(sp)
+    REG_L   s1, 16(sp)
+    REG_L   s2, 24(sp)
+    REG_L   s3, 32(sp)
+    addi    sp, sp, 48
+    ret
+
+/* insn_close: if an instruction group is open, end it with " OK" or,
+ * if any of its checks failed, " FAIL", and close it. Called before
+ * the summary and by each suite orchestrator before its banner.
+ * Clobbers t0, t1, a0. */
+insn_close:
+    la      t1, insn_name
     REG_L   t0, 0(t1)
     beqz    t0, 1f
     REG_S   zero, 0(t1)
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
-    la      a0, str_newline
-    jal     ra, uart_puts
+    la      a0, str_insn_ok
+    la      t1, insn_failed
+    lw      t0, 0(t1)
+    beqz    t0, 2f
+    la      a0, str_insn_fail
+2:  jal     ra, uart_puts
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
 1:  ret
@@ -586,12 +686,13 @@ pending_flush:
  *   a0 = pointer to test-name string (NUL terminated, no newline)
  *   a1 = expected value
  *   a2 = actual value
- * Prints "<name> - OK\r\n" or "<name> - FAIL\r\n" and bumps
- * pass_count or fail_count accordingly. If test_begin already printed
- * "<name> - " for this same name, only the verdict is added. The first
- * FAIL_LOG_MAX failures are also recorded in fail_log (the name pointer,
- * so it must point at a string that stays put -- every caller passes a
- * .rodata label) for the summary to list. Clobbers t0-t6, a0-a2.
+ * Bumps pass_count or fail_count. A pass prints nothing; a failure
+ * prints "<name> - FAIL\r\n" and marks the instruction group failed
+ * (see "Output format" above; the group is opened here if test_begin
+ * didn't). The first FAIL_LOG_MAX failures are also recorded in
+ * fail_log (the name pointer, so it must point at a string that stays
+ * put -- every caller passes a .rodata label) for the summary to list.
+ * Clobbers t0-t6, a0-a2.
  * -------------------------------------------------------------------- */
 check:
     addi    sp, sp, -32
@@ -602,7 +703,7 @@ check:
     mv      s0, a1
     mv      s1, a2
     mv      s2, a0
-    jal     ra, verdict_prefix
+    jal     ra, verdict_begin
     bne     s0, s1, .Lcheck_fail
     j       .Lpass_count
 .Lcheck_fail:
@@ -618,7 +719,9 @@ check:
     REG_S   s0, REG_BYTES(t0)       /* expected */
     REG_S   s1, (2 * REG_BYTES)(t0) /* actual */
     REG_S   zero, (3 * REG_BYTES)(t0) /* not a trap */
-1:  la      a0, str_fail
+1:  mv      a0, s2
+    jal     ra, fail_prefix
+    la      a0, str_fail
     jal     ra, uart_puts
     la      t0, fail_count
     lw      t1, 0(t0)
@@ -626,8 +729,6 @@ check:
     sw      t1, 0(t0)
     j       .Lcheck_done
 .Lpass_count:
-    la      a0, str_pass
-    jal     ra, uart_puts
     la      t0, pass_count
     lw      t1, 0(t0)
     addi    t1, t1, 1
@@ -640,26 +741,27 @@ check:
     addi    sp, sp, 32
     ret
 
-/* verdict_prefix: a0 = the name about to get its verdict. If
- * test_begin announced this same name, "<name> - " is already out and
- * the announcement is just cleared; otherwise any other pending line
- * is ended and "<name> - " printed. Clobbers t0, t1, a0; preserves
+/* verdict_begin: a0 = the name about to get its verdict. Clears the
+ * pending test_begin announcement and opens the name's instruction
+ * group if it isn't the open one. Clobbers t0, t1, a0; preserves
  * s0-s2 (check/check_trap keep their arguments there). */
-verdict_prefix:
+verdict_begin:
+    la      t0, pending_name
+    REG_S   zero, 0(t0)
+    j       insn_track
+
+/* fail_prefix: a0 = name of a failing check. Prints "<name> - " and
+ * marks the open instruction group failed. Clobbers t0, t1, a0. */
+fail_prefix:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
-    REG_S   a0, 8(sp)
-    la      t1, pending_name
-    REG_L   t0, 0(t1)
-    bne     t0, a0, 1f
-    REG_S   zero, 0(t1)
-    j       2f
-1:  jal     ra, pending_flush
-    REG_L   a0, 8(sp)
+    la      t0, insn_failed
+    li      t1, 1
+    sw      t1, 0(t0)
     jal     ra, uart_puts
     la      a0, str_dots
     jal     ra, uart_puts
-2:  REG_L   ra, 0(sp)
+    REG_L   ra, 0(sp)
     addi    sp, sp, 16
     ret
 
@@ -669,7 +771,7 @@ verdict_prefix:
  *   a1 = mcause of the trap
  *   a2 = mepc of the trap
  * Always a failure: prints "<name> - FAIL (trap, mcause=..., mepc=...)"
- * (only the verdict if test_begin announced the name), bumps
+ * in its instruction group and marks the group failed, bumps
  * fail_count and records (name, mcause, mepc, 1) in fail_log. A test
  * whose instruction under test might be unimplemented runs it armed
  * (TRAP_ARM) and, on the resume path, calls this once for every check
@@ -686,7 +788,7 @@ check_trap:
     mv      s0, a1
     mv      s1, a2
     mv      s2, a0
-    jal     ra, verdict_prefix
+    jal     ra, verdict_begin
     la      t0, fail_count
     lw      t1, 0(t0)
     li      t2, FAIL_LOG_MAX
@@ -700,7 +802,9 @@ check_trap:
     REG_S   s1, (2 * REG_BYTES)(t0) /* mepc */
     li      t1, 1
     REG_S   t1, (3 * REG_BYTES)(t0) /* a trap */
-1:  la      a0, str_fail_trap
+1:  mv      a0, s2
+    jal     ra, fail_prefix
+    la      a0, str_fail_trap
     jal     ra, uart_puts
     mv      a0, s0
     jal     ra, uart_put_hex64
@@ -789,9 +893,11 @@ fail_log_print:
  * ======================================================================= */
     .section .rodata
 str_dots:             .asciz " - "
-str_pass:             .asciz "OK\r\n"
 str_fail:             .asciz "FAIL\r\n"
 str_newline:          .asciz "\r\n"
+str_insn_head:        .asciz ":\r\n"
+str_insn_ok:          .asciz " OK\r\n"
+str_insn_fail:        .asciz " FAIL\r\n"
 str_summary_pass:     .asciz "\r\n--- Summary: pass_count = "
 str_summary_fail:     .asciz ", fail_count = "
 str_summary_tail:     .asciz " ---\r\n"
@@ -811,8 +917,8 @@ str_fail_log_trap:    .asciz " - trapped, mcause="
 str_no_fencei:        .asciz "FENCE.I not implemented (it traps): instruction-fetch sync skipped\r\n"
 
 /* =======================================================================
- *  Uninitialised data (contiguous with .text/.rodata in the flat binary,
- *  so it comes out zero-filled with no separate startup zeroing needed)
+ *  Uninitialised data. Not part of the flat .bin: reset zeroes all of
+ *  .bss (this file's and every suite's) before anything reads it.
  * ======================================================================= */
     .section .bss
     .align 3
@@ -823,10 +929,15 @@ ebreak_mcause: .word 0
 ebreak_hit_count: .word 0
 trap_count:   .word 0              /* traps taken while armed */
 has_fencei:   .word 0              /* reset's FENCE.I probe: 1 = implemented */
+insn_len:     .word 0              /* open group's key length */
+insn_failed:  .word 0              /* 1 = a check in the open group failed */
     .align 3
 ebreak_mepc:  REG_DATA 0
 pending_name: REG_DATA 0           /* name announced by test_begin, not
                                     * yet reported by check(); 0 = none */
+insn_name:    REG_DATA 0           /* open instruction group: its key's
+                                    * first byte (in a test name); 0 =
+                                    * none open */
 trap_resume:  REG_DATA 0           /* armed-trap resume address; 0 = unarmed */
 trap_mcause:  REG_DATA 0           /* the last armed trap's CSRs on entry */
 trap_mepc:    REG_DATA 0

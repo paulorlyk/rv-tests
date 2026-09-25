@@ -5,11 +5,12 @@
  *                  defines no symbols.
  *
  * TEST_BEGIN name -- announce a test before any of its code runs:
- * test_begin(name) prints "<name> - " at once, and the check() that
- * later reports the same name adds only "OK"/"FAIL". A test that traps
- * (UNEXPECTED TRAP) or hangs therefore leaves its own name as the last
- * line on the UART, not the name of the test before it. Output of a
- * passing run is unchanged.
+ * test_begin(name) opens the name's instruction group ("<INSN>:", see
+ * "Output format" in common.S) at once and remembers the name until
+ * the check() that reports it. A test that traps (UNEXPECTED TRAP)
+ * therefore gets its own name in the trap report, not the name of the
+ * test before it, and one that hangs leaves its instruction group as
+ * the last line on the UART.
  *
  * Fully register-transparent: ra and a0 are saved on the stack around
  * the call and test_begin preserves everything else, so the macro can
@@ -17,9 +18,8 @@
  * must not sit where sp/gp are being swept as operands (the la is
  * pinned pc-relative with norelax, but the call itself uses the stack).
  * Encoded uncompressed regardless of the surrounding .option rvc, so
- * its size is fixed. A check() whose name was never announced (or
- * differs from the announced one) still prints "<name> - <verdict>" in
- * full; the harness ends a dangling announced line first.
+ * its size is fixed. A check() whose name was never announced opens
+ * its instruction group itself, so it still reports in full.
  *
  * The bitx cases don't use this macro: BX_ENTER (bitx.inc) announces
  * each case itself.

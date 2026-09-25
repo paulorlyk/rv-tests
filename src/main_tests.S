@@ -15,7 +15,14 @@
  *   run_zifencei_tests (zifencei/tests.S + zifencei/fencei.S) -- Zifencei
  *   run_zicboz_tests (zicboz/tests.S + zicboz/cbozero.S)      -- Zicboz
  *   run_zabha_tests (zabha/tests.S + zabha/amo.S)            -- Zabha
- *   run_priv_tests  (priv/tests.S + priv/mret.S + priv/wfi.S) -- MRET, WFI
+ *   run_priv_tests  (priv/tests.S + priv/mret.S + priv/wfi.S +
+ *                    priv/csrpriv.S + priv/irqpriv.S + priv/mstatus.S)
+ *                                                        -- MRET, WFI,
+ *                                                           M/U separation
+ *   run_cache_tests (cache/tests.S + cache/dcache.S + cache/icache.S)
+ *                                                        -- data- and
+ *                                                           instruction-
+ *                                                           cache stress
  *
  * Adding a new suite means writing its own top-level file (following
  * c/tests.S or i/tests.S as a template: print a banner, call into
@@ -47,6 +54,7 @@ run_tests:
     call    run_zicboz_tests
     call    run_zabha_tests
     call    run_priv_tests
+    call    run_cache_tests
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16

@@ -17,9 +17,10 @@
  * Bit independence across fields (bitx_c_quadrant1, called last): every
  * bit pair among each instruction's variable fields set together, for
  * every instruction here except C.NOP (no variable fields): 55 cases
- * for C.ADDI/C.ADDIW/C.LI/C.J/C.BEQZ/C.BNEZ, 49 for C.LUI, 36 for
- * C.SRLI/C.SRAI/C.ANDI, 15 for C.ADDI16SP and each CA op. See the
- * bit-independence block below and bitx.inc.
+ * for C.ADDI/C.ADDIW/C.LI/C.J, 55 taken plus 55 not taken for
+ * C.BEQZ/C.BNEZ, 49 for C.LUI, 36 for C.SRLI/C.SRAI/C.ANDI, 15 for
+ * C.ADDI16SP and each CA op. See the bit-independence block below and
+ * bitx.inc.
  *
  * RV32 image (xlen.inc): C.ADDIW, C.SUBW and C.ADDW are RV64C-only and
  * left out; C.JAL, which reuses C.ADDIW's encoding on RV32C, is tested
@@ -236,17 +237,20 @@
 .endm
 
 /* C.BEQZ / C.BNEZ: rs1' and the 8-bit offset (bits 8:1, bit 8 the sign),
- * C(11,2) = 55 pairs; rs1' holds the pool's va, chosen so the branch is
- * taken (0 for BEQZ, nonzero for BNEZ). */
-.macro BX_C_CB insn, nm, rs1, v
+ * C(11,2) = 55 pairs; rs1' holds the pool's va, and tk says whether the
+ * branch is taken for it. Each runs twice: va chosen so it is taken (0
+ * for BEQZ, nonzero for BNEZ), then so it isn't (names end "not
+ * taken"), so a bit pair that forces the condition either way fails.
+ * (Offset +2 can't tell the two apart: both land on the next slot.) */
+.macro BX_C_CB insn, tk, nm, rs1, v
     .if ((\v) - (((\v) & 0x100) << 1)) > 0
-    BX_C_CB_ \insn, \nm, \rs1, \v, ((\v) - (((\v) & 0x100) << 1)), (BX_EXIT - ((\v) - (((\v) & 0x100) << 1)) - 2 * BX_MARGIN)
+    BX_C_CB_ \insn, \tk, \nm, \rs1, \v, ((\v) - (((\v) & 0x100) << 1)), (BX_EXIT - ((\v) - (((\v) & 0x100) << 1)) - 2 * BX_MARGIN)
     .else
-    BX_C_CB_ \insn, \nm, \rs1, \v, ((\v) - (((\v) & 0x100) << 1)), BX_SITE_B
+    BX_C_CB_ \insn, \tk, \nm, \rs1, \v, ((\v) - (((\v) & 0x100) << 1)), BX_SITE_B
     .endif
 .endm
 
-.macro BX_C_CB_ insn, nm, rs1, v, d, site
+.macro BX_C_CB_ insn, tk, nm, rs1, v, d, site
     BX_ENTER
     .pushsection .rodata
     .balign 4
@@ -259,8 +263,12 @@
     BX_PLANT \site, 2
     BX_PV   x\rs1, 0
     BX_GO   \site
-    BX_COUNT \site, \d, 2, 1
+    BX_COUNT \site, \d, 2, \tk
+    .if \tk
     BX_REPORT "\nm bitx rs1'=x\rs1 off=\v"
+    .else
+    BX_REPORT "\nm bitx rs1'=x\rs1 off=\v not taken"
+    .endif
 .endm
 
 /* =======================================================================
@@ -1392,12 +1400,10 @@ test_c_addw:
     .endif
 
 /* T_J_FWD dist, name -- unconditional forward jump of exactly "dist"
- * bytes (even, >=4). Structure: c.j(2) + c.li poison(2) + N c.nop
+ * bytes (even, >=4). Structure: c.j(2) + c.li poison(2) + N poison
  * fillers(2N), landing exactly on the label after all of it, i.e.
- * dist = 4 + 2N. The poison sits immediately after the jump (not
- * buried in the filler run) so any decode error that lands even
- * slightly short is very likely to hit it rather than coincidentally
- * land on a harmless c.nop. */
+ * dist = 4 + 2N. Every filler is a poison c.li too, so a jump that
+ * lands anywhere short of the target fails. */
 .macro T_J_FWD dist, name
     TEST_BEGIN \name
     LIX     s2, 0
@@ -1405,7 +1411,7 @@ test_c_addw:
     c.j     1f
     c.li    s2, -1                  /* poison: only hit if C.J landed wrong */
     .rept (\dist - 4) / 2
-    c.nop
+    c.li    s2, -1                  /* poison: landing in the pad, short */
     .endr
 1:
     .option norvc
@@ -1417,10 +1423,11 @@ test_c_addw:
 
 /* T_J_BWD dist, name -- unconditional backward jump of exactly "dist"
  * bytes (even, >=6). Jumps ahead first (plain 4-byte jal, not under
- * test) to reach the filler run without falling into the target
- * linearly, then the real C.J jumps back over that filler run to the
- * success marker. dist = 6 + 2N (2 for the c.li marker, 4 for the
- * bookkeeping jal, 2N for N c.nop fillers). */
+ * test) straight to the C.J, which jumps back over the filler run to
+ * the success marker. dist = 6 + 2N (2 for the c.li marker, 4 for the
+ * bookkeeping jal, 2N for N filler c.j). Every filler slot jumps on to
+ * the poison after the C.J, so a C.J that lands short, in the filler,
+ * fails: with c.nops there it would run into the same C.J and loop. */
 .macro T_J_BWD dist, name
     TEST_BEGIN \name
     LIX     s2, 0
@@ -1430,14 +1437,14 @@ test_c_addw:
     c.li    s2, 1                   /* success marker: the true target */
     .option norvc
     j       6f
-5:
     .option rvc
     .rept (\dist - 6) / 2
-    c.nop
+    c.j     8f                      /* landing in the pad, short: escape */
     .endr
+5:
     c.j     4b
     .option norvc
-    LIX     s2, 99                  /* poison: only hit if C.J landed wrong */
+8:  LIX     s2, 99                  /* poison: only hit if C.J landed wrong */
 6:
     la      a0, \name
     LIX     a1, 1
@@ -1546,7 +1553,7 @@ test_c_j:
 7:  c.jal   1f
     c.li    s2, -1                  /* poison: only hit if C.JAL landed wrong */
     .rept (\dist - 4) / 2
-    c.nop
+    c.li    s2, -1                  /* poison: landing in the pad, short */
     .endr
 1:
     .option norvc
@@ -1573,14 +1580,14 @@ test_c_j:
     c.li    s2, 1                   /* success marker: the true target */
     .option norvc
     j       6f
-5:
     .option rvc
     .rept (\dist - 6) / 2
-    c.nop
+    c.j     8f                      /* landing in the pad, short: escape */
     .endr
+5:
 7:  c.jal   4b
     .option norvc
-    LIX     s2, 99                  /* poison: only hit if C.JAL landed wrong */
+8:  LIX     s2, 99                  /* poison: only hit if C.JAL landed wrong */
 6:
     mv      s4, ra
     la      a0, \name
@@ -1771,21 +1778,23 @@ test_c_beqz:
 
     TEST_BEGIN str_beqz_maxbwd
     /* --- max backward offset (-256): jump past the target block on
-     *     the way down, run 124 filler C.NOPs, then branch back --- */
+     *     the way down, straight to the branch, which branches back
+     *     over 124 filler c.j's; each jumps on to the poison, so a
+     *     short landing is a FAIL, not a loop --- */
     LIX     s0, 0
     LIX     s5, 0
     j       5f
 4:
     LIX     s5, 1                   /* success marker */
     j       6f
-5:
     .option rvc
     .rept 124
-    c.nop
+    c.j     8f                      /* landing in the pad, short: escape */
     .endr
+5:
     c.beqz  s0, 4b
     .option norvc
-    LIX     s5, 99                  /* poison: only hit if NOT taken */
+8:  LIX     s5, 99                  /* poison: only hit if NOT taken */
 6:
     la      a0, str_beqz_maxbwd
     LIX     a1, 1
@@ -1890,16 +1899,16 @@ test_c_bnez:
     LIX     s5, 0
     j       5f
 4:
-    LIX     s5, 1
+    LIX     s5, 1                   /* success marker */
     j       6f
-5:
     .option rvc
     .rept 124
-    c.nop
+    c.j     8f                      /* landing in the pad, short: escape */
     .endr
+5:
     c.bnez  s0, 4b
     .option norvc
-    LIX     s5, 99
+8:  LIX     s5, 99
 6:
     la      a0, str_bnez_maxbwd
     LIX     a1, 1
@@ -1998,9 +2007,11 @@ bitx_c_quadrant1:
     .endif
     /* offset background +8 for the rs1'-only pairs */
     BX_POOL 0, 0
-    BX_E_RI3 BX_C_CB, "c.beqz, C.BEQZ", "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100", 8
+    BX_E_RI3 BX_C_CB, "c.beqz, 1, C.BEQZ", "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100", 8
+    BX_E_RI3 BX_C_CB, "c.bnez, 0, C.BNEZ", "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100", 8
     BX_POOL 0x0123456789abcdef, 0
-    BX_E_RI3 BX_C_CB, "c.bnez, C.BNEZ", "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100", 8
+    BX_E_RI3 BX_C_CB, "c.bnez, 1, C.BNEZ", "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100", 8
+    BX_E_RI3 BX_C_CB, "c.beqz, 0, C.BEQZ", "0x2,0x4,0x8,0x10,0x20,0x40,0x80,0x100", 8
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16

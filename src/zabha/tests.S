@@ -13,8 +13,8 @@
  * so it gets its own suite like every other extension. The category
  * file exposes exactly one symbol and keeps its macros/strings local.
  * All 18 instructions exist on both widths, so both images run the
- * same cases. AMOCAS.B/AMOCAS.H exist only together with Zacas and are
- * not covered.
+ * same cases. AMOCAS.B/AMOCAS.H (Zabha together with Zacas) are not
+ * tested.
  * ===================================================================== */
 
     .include "xlen.inc"
@@ -29,6 +29,7 @@ run_zabha_tests:
     addi    sp, sp, -16
     REG_S   ra, 0(sp)
 
+    call    insn_close          /* end the previous suite's last group */
     la      a0, str_zabha_banner
     call    uart_puts
 

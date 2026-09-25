@@ -40,9 +40,14 @@
  * are in bitx.inc (BX_PLANT / BX_GO / BX_COUNT).
  *
  * The region is ~1 MiB of .bss, so it costs nothing in the flat binary
- * but does need that much RAM after the image. It's rebuilt only once
- * (bx_sled_init is idempotent); the tests re-plant only the site they
- * use.
+ * but does need that much RAM after the image. It's built only once:
+ * bx_ready (.bss, so zeroed by common.S's reset -- never by the loader)
+ * makes bx_sled_init idempotent, and the tests re-plant only the site
+ * they use.
+ *
+ * The cache suite (cache/) borrows the region as its 1 MiB of scratch
+ * RAM, data and code, and calls bx_sled_release first: the sled is
+ * then rebuilt by the next bx_sled_init, whoever calls it.
  * ===================================================================== */
 
     .include "xlen.inc"
@@ -53,6 +58,7 @@
     .include "bitx.inc"
 
     .global bx_sled_init
+    .global bx_sled_release
     .global bx_region
     .global bx_tpl_slot
     .global bx_tpl_cnop
@@ -92,6 +98,13 @@ bx_sled_init:
     li      t1, 1
     sw      t1, 0(t0)
 9:  ret
+
+/* bx_sled_release: the caller is about to overwrite bx_region; forget
+ * the sled so the next bx_sled_init builds it again. Clobbers t0. */
+bx_sled_release:
+    la      t0, bx_ready
+    sw      zero, 0(t0)
+    ret
 
 /* Templates, assembled here so their encodings are the assembler's. */
     .section .rodata
