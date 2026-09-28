@@ -61,8 +61,11 @@ to it.
 - **`zabha/tests.S`** + **`zabha/amo.S`** — the Zabha suite. See "The
   Zabha suite" below.
 - **`priv/tests.S`** + **`priv/mret.S`**/**`priv/wfi.S`**/
-  **`priv/csrpriv.S`**/**`priv/irqpriv.S`**/**`priv/mstatus.S`** — the
-  privileged suite. See "The privileged suite" below.
+  **`priv/csrpriv.S`**/**`priv/irqpriv.S`**/**`priv/mstatus.S`**/
+  **`priv/smode.S`**/**`priv/sret.S`**/**`priv/deleg.S`**/
+  **`priv/sirq.S`**/**`priv/scsr.S`**/**`priv/counteren.S`**/
+  **`priv/sfence.S`** (and `priv/smode.inc`) — the privileged suite,
+  M-, S- and U-mode. See "The privileged suite" below.
 - **`cache/tests.S`** + **`cache/dcache.S`**/**`cache/icache.S`** (and
   `cache/cache.inc`) — the cache suite. See "The cache suite" below.
 - **`xlen.inc`** — the RV64/RV32 switch every file includes first; see
@@ -94,8 +97,8 @@ Current totals, all passing on both widths:
 
 | Image | Checks | Per-instruction | Bit-independence | UART output (at 115200 baud) |
 |---|---|---|---|---|
-| RV64 (`build/rv64/`) | **29491** | 4013 | 25478 | ~16 KB, ~1.4 s |
-| RV32 (`build/rv32/`) | **23407** | 3336 | 20071 | ~13 KB, ~1.1 s |
+| RV64 (`build/rv64/`) | **30050** | 4527 | 25523 | ~17 KB, ~1.5 s |
+| RV32 (`build/rv32/`) | **24020** | 3904 | 20116 | ~14 KB, ~1.2 s |
 
 (`AMOMIN`/`AMOMAX`/`AMOMINU`/`AMOMAXU` add 2348 checks on RV64, 2176 of
 them bitx, and 1168 on RV32, 1088 of them bitx. `LR`/`SC` add 927 checks
@@ -108,7 +111,11 @@ AMOs add 5377 on each width, 4896 of them bitx. `ECALL`/`EBREAK` add 44
 on each width, `MRET` 20 and `WFI` 18, none of them bitx: those four
 have no variable field. The M/U separation files add 589
 (`priv/csrpriv.S`), 24 (`priv/irqpriv.S`) and 16 on RV64 / 13 on RV32
-(`priv/mstatus.S`), none of them bitx. The not-taken bitx series of the
+(`priv/mstatus.S`), none of them bitx. The S-mode files add 24
+(`priv/smode.S`), 30 (`priv/sret.S`), 47 (`priv/deleg.S`), 68
+(`priv/sirq.S`), 258 (`priv/scsr.S`), 54 on RV64 / 108 on RV32
+(`priv/counteren.S`: RV32 also has the upper-half counters) and 78
+(`priv/sfence.S`, 45 of them `SFENCE.VMA` bitx). The not-taken bitx series of the
 six branches and of `C.BEQZ`/`C.BNEZ` add 1436 on each width. The cache
 suite adds 116 on RV64 and 98 on RV32 (88 / 70 in `cache/dcache.S`, 28
 in `cache/icache.S`), none of them bitx: it tests no instruction of its
@@ -1084,9 +1091,12 @@ well.
 `MRET` and `WFI` come from the privileged architecture's machine-level
 ISA rather than from RV64I or an unprivileged extension, so they have a
 suite of their own (the base ISA's own SYSTEM instructions, `ECALL` and
-`EBREAK`, are in `i/system.S`). The same suite checks the separation
-between M-mode and U-mode. Identical on both widths apart from the
-CLINT access and the RV64-only `UXL` checks:
+`EBREAK`, are in `i/system.S`), and so do `SRET` and `SFENCE.VMA` from
+the supervisor-level ISA. The same suite checks the separation between
+M-, S- and U-mode: switching between them, trap delegation, interrupt
+enables and priority across the three, and which CSRs each may touch.
+Identical on both widths apart from the CLINT access, the RV64-only
+`UXL` checks and the RV32-only upper-half counters:
 - **`priv/mret.S`**: `MRET`
 - **`priv/wfi.S`**: `WFI`
 - **`priv/csrpriv.S`**: M-mode CSRs accessed from U-mode
@@ -1094,15 +1104,47 @@ CLINT access and the RV64-only `UXL` checks:
   M-mode: vectored `mtvec`, priority
 - **`priv/mstatus.S`**: `mstatus.MPP`/`UXL` legality, `misa.U`, the
   interrupt-enable stack on a trap from U-mode
+- **`priv/smode.S`**: switching between M-, S- and U-mode
+- **`priv/sret.S`**: `SRET` (and `mstatus.TSR`)
+- **`priv/deleg.S`**: exception delegation (`medeleg`, `mideleg`)
+- **`priv/sirq.S`**: supervisor interrupts: delegation, enables in
+  M/S/U-mode, priority, vectored `stvec`
+- **`priv/scsr.S`**: the `sstatus`/`sie`/`sip` views; S-mode CSRs from
+  U-mode, M-mode CSRs from S-mode
+- **`priv/counteren.S`**: `mcounteren`/`scounteren` gating
+  `cycle`/`time`/`instret`
+- **`priv/sfence.S`**: `SFENCE.VMA`, `mstatus.TVM`, and `TW` (`WFI`) in
+  S-mode
 
-`MRET` and `WFI` have a single fixed encoding, so there is nothing for
-bit independence to pair. The other three files test no new
-instruction (the CSR instructions' bitx cases are in the Zicsr suite).
-Traps caused on purpose go through the armed handler (see "Traps on
-purpose"), and the U-mode parts rely on the PMP entry `common.S` sets
-up. Every U-mode sequence ends in a backstop (an `ECALL`, or an
-`mscratch` read), so an instruction that wrongly doesn't trap comes back
-through the handler as a `FAIL`.
+`MRET`, `WFI` and `SRET` have a single fixed encoding, so there is
+nothing for bit independence to pair; `SFENCE.VMA` gets its 45 cases
+(`rs1` × `rs2`, see below). The other files test no new instruction
+(the CSR instructions' bitx cases are in the Zicsr suite). Traps
+caused on purpose go through the armed handler (see "Traps on
+purpose"), and the U- and S-mode parts rely on the PMP entry `common.S`
+sets up. Every U- or S-mode sequence ends in a backstop (an `ECALL`, or
+an `mscratch` read), so an instruction that wrongly doesn't trap comes
+back through the handler as a `FAIL`.
+
+The S-mode files share `priv/smode.inc`. A trap delegated to S-mode
+goes to `stvec`, out of the armed handler's sight, so each file points
+`stvec` at its own copy of `sm_shandler`, which records `scause`/
+`sepc`/`stval`/`sstatus` and a count, then executes `ECALL` — an
+environment call from S-mode, which no test delegates — so the armed
+handler in M-mode resumes the test. A delegated trap therefore shows up
+as one S-mode trap plus one M-mode trap with mcause 9, and one that
+wrongly isn't delegated as an M-mode trap with its own cause: a `FAIL`
+either way. `SM_RUN mode, insn` runs one instruction in S- or U-mode
+(`MRET` with `MPP` = 1 or 0, `satp` = 0, so it runs in place) with an
+`ECALL` after it; `T_SM_ILL` checks that it was an illegal-instruction
+trap into M-mode (one trap, mcause 2, `mepc` on it, `MPP`, `rd` not
+written), `T_SM_OK` that the `ECALL` was the only trap. Every write to a
+CSR that exists only with S-mode runs armed, including the cleanup
+(`sm_clean`), so on a hart without S-mode the S-mode checks `FAIL` and
+the run completes: under QEMU with `-cpu rv64,s=false,h=false` (and
+`rv32`) the totals are unchanged and 191 / 206 checks fail (the six
+U-mode `CBO.ZERO` checks of `zicboz/cbozero.S` among them, see
+"Porting").
 
 - **`priv/mret.S`**: every `MRET` is executed directly by test code with
   `mepc` and `mstatus` set up by hand, so each of its effects is checked
@@ -1193,6 +1235,100 @@ through the handler as a `FAIL`.
   U-mode entered with `MIE` = 0 and with `MIE` = 1 (`mie` = 0, so
   nothing can interrupt) traps exactly once with `MPIE` = U-mode's
   `MIE`, `MIE` = 0 and `MPP` = U on entry.
+- **`priv/smode.S`**: `MRET` with `MPP` = 1 enters S-mode: `sscratch` can
+  be written and read back there, and an `mscratch` read traps with
+  mcause 2 and `MPP` = 1 (entered in U-mode instead, the `sscratch`
+  write traps first; left in M-mode, nothing traps). `ECALL` from
+  S-mode is mcause 9, once, `mepc` on it, `mtval` 0, `MPP` = 1. On a
+  trap from S-mode, `MPIE` = S-mode's `MIE` (both ways), `MIE` = 0, and
+  the S-mode stack (`SIE`/`SPIE`/`SPP`, two opposite patterns) is left
+  alone. `MRET` into S-mode clears `MPRV`. Finally a chain M → S (`MRET`)
+  → U (`SRET`) → S (delegated `ECALL`) → U (`SRET` from the handler,
+  `sepc` + 4) → S → U → M: the S-mode handler runs exactly twice, U-mode
+  goes on after each `ECALL`, and the last trap is the `sscratch` read
+  in U-mode (mcause 2, `MPP` = 0). The chain's handler leaves through an
+  `ECALL` after four passes, so a return to the wrong place can't loop.
+- **`priv/sret.S`**: `SRET` from M-mode with `SPP` = 1 lands on `sepc`,
+  in S-mode (the `ECALL` there is cause 9, `MPP` = 1), and leaves `sepc`
+  unchanged; with `SPP` = 0 it enters U-mode. It pops the S-mode stack:
+  `SIE` ← `SPIE` both ways, `SPIE` = 1 and `SPP` = U afterwards. From
+  S-mode, `SPP` = 1 stays in S-mode and `SPP` = 0 goes to U-mode, both
+  at `sepc`. With `mstatus.TSR` = 1 it is illegal in S-mode but still
+  works in M-mode; in U-mode it is illegal. It clears `MPRV`. The two
+  cases where `SRET` must trap point `sepc` at an escape `ECALL` first,
+  so one that wrongly works can't jump back into itself.
+- **`priv/deleg.S`**: `medeleg`/`mideleg` are WARL: `medeleg[11]`
+  (`ECALL` from M-mode) reads 0 after writing all ones, and the bits
+  used here (2, 3, 8; `mideleg`'s SSIP/STIP/SEIP) read 1. Delegated
+  (medeleg bit set): `ECALL` from U-mode (with `SIE` 0 and 1
+  beforehand), an illegal instruction (an `mscratch` read) and `EBREAK`
+  from U-mode, and the latter two from S-mode into S-mode, are each
+  taken in S-mode exactly once, with `scause`, `sepc` on the
+  instruction, `SPP` = the mode it came from, `stval` (0; 0 or the
+  instruction bits; 0 or the pc), and for `ECALL` `SIE` = 0, `SPIE` =
+  the `SIE` before. Not delegated: `ECALL` from U-mode with only bits 2
+  and 3 set goes to M-mode, as does `ECALL` from S-mode with bit 8 set
+  (cause 9 has its own bit). An illegal instruction (a write to the
+  read-only `mhartid`) and an `EBREAK` in M-mode are taken in M-mode
+  whatever `medeleg` says.
+- **`priv/sirq.S`**: the three supervisor-level interrupts (SSI 1, STI
+  5, SEI 9), raised by writing `mip` in M-mode. For each, pending and
+  enabled in `mie`: not delegated, it is taken in M-mode with `MIE` = 1
+  and in S-mode with `MIE` = 0 (M-mode interrupts are always enabled
+  below M), with `mcause` = interrupt bit | cause and `MPP` = 1.
+  Delegated, it is not taken in M-mode even with `MIE` = `SIE` = 1; in
+  S-mode it is taken with `SIE` = 1 (in S-mode, once, `scause`, `SPP` =
+  1, `SPIE` = 1, `SIE` = 0, `sepc` in the S-mode code) and not with
+  `SIE` = 0; in U-mode it is taken even with `SIE` = 0 (`SPP` = 0); and
+  with its bit clear in `mie` it is not taken. S-mode raising its own
+  software interrupt through `sip` takes it at once. The machine
+  software interrupt (CLINT `msip`) in S-mode with `mideleg` all ones is
+  still taken in M-mode, and ahead of a pending delegated SSI. SSI goes
+  before STI, delegated in S-mode and not delegated in M-mode. With
+  vectored `stvec`, SSI/STI/SEI enter at BASE + 4 × cause and a
+  delegated exception at BASE (a 16-slot counting table, as in
+  `priv/irqpriv.S`). Not tested: that SEI goes before SSI and STI. The
+  spec requires it, but QEMU 10.0 (without Smaia) takes SSI first when
+  both are pending, so the test would fail on the reference platform.
+  The not-taken cases are a bounded spin followed by an `ECALL`, which
+  must be the only trap.
+- **`priv/scsr.S`**: `sstatus`, `sie` and `sip` are restricted views of
+  `mstatus`, `mie` and `mip`. `SIE`/`SPIE`/`SPP` written through either
+  register read back through the other; `mstatus`'s M-mode fields
+  (`MPIE`, `MPP`, `MPRV`, `TW`, `TVM`, `TSR`) read 0 in `sstatus`, and
+  writing all ones to `sstatus` leaves them (and `MIE`) 0. `sie.SSIE`
+  and `sip.SSIP` read 0 while SSI is not delegated and mirror `mie`/
+  `mip` once it is (`sip.STIP` too); setting `sie.SSIE` reaches `mie`
+  only when delegated, clearing `sip.SSIP` clears `mip.SSIP`; the M-level
+  enables never show in `sie`. Privilege: the ten S-mode CSRs
+  (`sstatus`, `sie`, `stvec`, `sscratch`, `sepc`, `scause`, `stval`,
+  `sip`, `satp`, `scounteren`) are illegal from U-mode, read or written
+  (with the value already there), and readable from S-mode; fourteen
+  M-mode CSRs (`mstatus`, `misa`, `medeleg`, `mideleg`, `mie`, `mtvec`,
+  `mcounteren`, `menvcfg`, `mscratch`, `mepc`, `mcause`, `mtval`, `mip`,
+  and read-only `mhartid`) are illegal from S-mode, read or written.
+- **`priv/counteren.S`**: `mcounteren.CY`/`TM`/`IR` let S-mode read
+  `cycle`/`time`/`instret`, and U-mode needs the same bit in
+  `scounteren` too. For each counter (and on RV32 its upper half):
+  M-mode reads it with both registers 0; S-mode traps without the
+  `mcounteren` bit and reads with it; U-mode traps with only one of the
+  two bits and reads with both. Where a bit is cleared every other bit
+  is set, so a hart that checks the wrong bit fails.
+- **`priv/sfence.S`**: `SFENCE.VMA` doesn't trap in M-mode, nor in
+  S-mode with `TVM` = 0; with `TVM` = 1 it is illegal in S-mode, and it
+  is illegal in U-mode. With `TVM` = 1, `satp` is illegal in S-mode
+  (read, and write of 0) but not in M-mode, and other S-mode CSRs are
+  unaffected; with `TVM` = 0, S-mode writes `satp`. `WFI` in S-mode with
+  `TW` = 1 is illegal; with `TW` = 0 and a delegated SSI pending and
+  enabled in `sie` but `SIE` = 0, it completes and nothing is taken. In
+  U-mode with `TW` = 0, on a hart with S-mode, `WFI` with nothing pending
+  is illegal (like `priv/wfi.S`'s `TW` = 1 case, this pins down the
+  usual, and QEMU's, reading of the spec's time limit). The `WFI` cases
+  arm the machine timer `WFI_DELAY` ticks ahead, so a `WFI` that waits
+  when it should trap is ended by an M-mode interrupt: a `FAIL`, not a
+  hang. The bitx cases run `SFENCE.VMA` in M-mode for every pair of
+  `rs1`/`rs2` bits (background `x0`), loaded with the sentinel, and
+  check that it doesn't trap and leaves them unchanged.
 
 ## The cache suite
 
@@ -1374,7 +1510,9 @@ SRCS="common.S main_tests.S \
       zicsr/tests.S zicsr/reg.S zicsr/imm.S zifencei/tests.S zifencei/fencei.S \
       zicboz/tests.S zicboz/cbozero.S zabha/tests.S zabha/amo.S \
       priv/tests.S priv/mret.S priv/wfi.S priv/csrpriv.S \
-      priv/irqpriv.S priv/mstatus.S \
+      priv/irqpriv.S priv/mstatus.S priv/smode.S priv/sret.S \
+      priv/deleg.S priv/sirq.S priv/scsr.S priv/counteren.S \
+      priv/sfence.S \
       cache/tests.S cache/dcache.S cache/icache.S bitx.S"
 for f in $SRCS; do
   mkdir -p build/rv64/$(dirname $f)
@@ -1389,7 +1527,8 @@ riscv64-linux-gnu-objcopy -O binary rv_tests.elf rv_tests.bin
 Run it from the repo root. The source paths are relative to `src/`. The
 files in `src/c/`, `src/i/`, `src/m/`, `src/a/`, `src/zicsr/`,
 `src/zifencei/`, `src/zicboz/`, `src/zabha/`, `src/priv/` and `src/cache/` `.include` `xlen.inc`, `harness.inc` and `bitx.inc` from
-`src/` (`-I src`; the cache files also include `cache/cache.inc`). Each object keeps its
+`src/` (`-I src`; the cache files also include `cache/cache.inc`, and
+the S-mode files of `priv/` include `priv/smode.inc`). Each object keeps its
 source's subdirectory under `build/rv64/`, because the suites' `tests.S`
 files share a basename.
 
@@ -1443,7 +1582,9 @@ point. To add a new suite (say, the `F` extension):
    `zifencei/fencei.S`, `zicboz/tests.S` into `zicboz/cbozero.S`,
    `zabha/tests.S` into `zabha/amo.S`,
    `priv/tests.S` into `priv/mret.S`/`priv/wfi.S`/`priv/csrpriv.S`/
-   `priv/irqpriv.S`/`priv/mstatus.S`, and `cache/tests.S` into
+   `priv/irqpriv.S`/`priv/mstatus.S`/`priv/smode.S`/`priv/sret.S`/
+   `priv/deleg.S`/`priv/sirq.S`/`priv/scsr.S`/`priv/counteren.S`/
+   `priv/sfence.S`, and `cache/tests.S` into
    `cache/dcache.S`/`cache/icache.S`.
    Every extension gets its own directory, even a single-instruction one
    like Zifencei or Zicboz.
@@ -1572,6 +1713,17 @@ fields"):
    to wait but longer than the few instructions between arming the
    timer and the `WFI`. A `WFI` that never wakes hangs with its
    instruction group (`WFI:`) as the last line printed.
+   The S-mode files (`priv/smode.S` ... `priv/sfence.S`) need S-mode
+   as well, with `satp` = 0 (Bare) accepted, `medeleg` bits 2, 3 and 8
+   and `mideleg`'s SSIP/STIP/SEIP writable, `mip.STIP`/`SEIP` writable
+   from M-mode (true while the Sstc extension's `menvcfg.STCE` is 0,
+   its reset value), vectored `stvec` at a 64-byte-aligned BASE, a
+   `time` CSR that reads without trapping to M-mode, and `menvcfg`.
+   `priv/sirq.S` and `priv/sfence.S` use the same CLINT (`msip`, and the
+   timer as the `WFI` backstop). Their S-mode trap handler returns to
+   M-mode with an `ECALL`, which must not be delegated with
+   `medeleg[9]` = 0. Without S-mode their checks `FAIL` (see "The
+   privileged suite"); they don't hang.
 11. **The UART line control register.** `i/fence.S`'s I/O-ordering
    cases write and read back the ns16550a's LCR (offset 3, changing only
    parity/stop bits, after LSR.TEMT, offset 5 bit 6, shows the
@@ -1645,6 +1797,18 @@ Source paths elsewhere in this document are relative to `src/`.
   vectored `mtvec` and interrupt priority.
 - `priv/mstatus.S` — `mstatus` privilege fields and the trap-entry
   stack from U-mode.
+- `priv/smode.S` — switching between M-, S- and U-mode.
+- `priv/sret.S` — the `SRET` test bodies (and `mstatus.TSR`).
+- `priv/deleg.S` — exception delegation to S-mode.
+- `priv/sirq.S` — supervisor interrupts: delegation, enables across
+  modes, priority, vectored `stvec`.
+- `priv/scsr.S` — the `sstatus`/`sie`/`sip` views and S/M CSR
+  privilege.
+- `priv/counteren.S` — `mcounteren`/`scounteren`.
+- `priv/sfence.S` — the `SFENCE.VMA` test bodies, `mstatus.TVM`, and
+  `TW` in S-mode.
+- `priv/smode.inc` — the S-mode files' shared S-mode trap handler,
+  mode-entry and check macros (included, not linked).
 - `cache/tests.S` — cache suite orchestrator (defines
   `run_cache_tests`).
 - `cache/dcache.S` — the data-cache stress tests.

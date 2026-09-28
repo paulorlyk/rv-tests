@@ -1,5 +1,5 @@
 /* =====================================================================
- * priv/tests.S  --  privileged-architecture (machine-mode) suite
+ * priv/tests.S  --  privileged-architecture (M/S/U-mode) suite
  *                   (orchestrator)
  *
  * Same role as c/tests.S / i/tests.S / zicsr/tests.S: defines
@@ -13,12 +13,23 @@
  *                     interrupt priority
  *   priv/mstatus.S  - mstatus MPP/UXL legality, misa.U, the trap-entry
  *                     stack from U-mode
+ *   priv/smode.S    - switching between M-, S- and U-mode
+ *   priv/sret.S     - SRET (and mstatus.TSR)
+ *   priv/deleg.S    - exception delegation (medeleg, mideleg)
+ *   priv/sirq.S     - supervisor interrupts: delegation, enables in
+ *                     M/S/U-mode, priority, vectored stvec
+ *   priv/scsr.S     - sstatus/sie/sip views; S-mode CSRs from U-mode,
+ *                     M-mode CSRs from S-mode
+ *   priv/counteren.S - mcounteren/scounteren gating the counters
+ *   priv/sfence.S   - SFENCE.VMA, mstatus.TVM, TW (WFI) in S-mode
  *
  * MRET and WFI come from the privileged architecture's machine-level
  * ISA, not from RV64I/RV32I (whose own SYSTEM instructions, ECALL and
  * EBREAK, are in i/system.S) or any unprivileged extension, so they
- * get a suite of their own; the other three files check the
- * separation between M-mode and U-mode. All of them need U-mode for
+ * get a suite of their own, as do SRET and SFENCE.VMA from the
+ * supervisor-level ISA; the other files check the separation between
+ * M-, S- and U-mode. The S-mode files share priv/smode.inc (their
+ * S-mode trap handler and mode-entry macros). All of them need U-mode for
  * (part of) their coverage and common.S's armed trap mode (TRAP_ARM in
  * harness.inc) for the traps they cause on purpose. Each category file exposes
  * exactly one symbol and keeps its macros/strings local. Built for
@@ -46,6 +57,13 @@ run_priv_tests:
     call    tests_priv_csrpriv
     call    tests_priv_irqpriv
     call    tests_priv_mstatus
+    call    tests_priv_smode
+    call    tests_priv_sret
+    call    tests_priv_deleg
+    call    tests_priv_sirq
+    call    tests_priv_scsr
+    call    tests_priv_counteren
+    call    tests_priv_sfence
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
@@ -53,7 +71,7 @@ run_priv_tests:
 
     .section .rodata
     .if XLEN == 64
-str_priv_banner: .asciz "\r\n\r\n=== RV64 privileged (machine-mode) instruction test suite ===\r\n\r\n"
+str_priv_banner: .asciz "\r\n\r\n=== RV64 privileged (M/S/U-mode) instruction test suite ===\r\n\r\n"
     .else
-str_priv_banner: .asciz "\r\n\r\n=== RV32 privileged (machine-mode) instruction test suite ===\r\n\r\n"
+str_priv_banner: .asciz "\r\n\r\n=== RV32 privileged (M/S/U-mode) instruction test suite ===\r\n\r\n"
     .endif

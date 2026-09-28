@@ -73,7 +73,11 @@
 #   priv/tests.S      - privileged suite orchestrator; defines
 #                       run_priv_tests, calls tests_priv_mret/
 #                       tests_priv_wfi/tests_priv_csrpriv/
-#                       tests_priv_irqpriv/tests_priv_mstatus
+#                       tests_priv_irqpriv/tests_priv_mstatus/
+#                       tests_priv_smode/tests_priv_sret/
+#                       tests_priv_deleg/tests_priv_sirq/
+#                       tests_priv_scsr/tests_priv_counteren/
+#                       tests_priv_sfence
 #   priv/mret.S       - MRET
 #   priv/wfi.S        - WFI
 #   priv/csrpriv.S    - M-mode CSRs accessed from U-mode
@@ -81,6 +85,17 @@
 #                       mtvec, interrupt priority
 #   priv/mstatus.S    - mstatus MPP/UXL legality, misa.U, trap-entry
 #                       stack from U-mode
+#   priv/smode.S      - switching between M-, S- and U-mode
+#   priv/sret.S       - SRET (and mstatus.TSR)
+#   priv/deleg.S      - exception delegation (medeleg, mideleg)
+#   priv/sirq.S       - supervisor interrupts: delegation, enables in
+#                       M/S/U-mode, priority, vectored stvec
+#   priv/scsr.S       - sstatus/sie/sip views; S-mode CSRs from U-mode,
+#                       M-mode CSRs from S-mode
+#   priv/counteren.S  - mcounteren/scounteren gating cycle/time/instret
+#   priv/sfence.S     - SFENCE.VMA, mstatus.TVM, TW (WFI) in S-mode
+#   priv/smode.inc    - the S-mode files' shared S-mode trap handler and
+#                       mode-entry macros
 #   cache/tests.S     - cache suite orchestrator; defines
 #                       run_cache_tests, calls tests_cache_dcache/
 #                       tests_cache_icache
@@ -151,10 +166,12 @@ SUITE_SRCS  = main_tests.S c/tests.S c/quadrant0.S c/quadrant1.S c/quadrant2.S \
               zicboz/tests.S zicboz/cbozero.S \
               zabha/tests.S zabha/amo.S \
               priv/tests.S priv/mret.S priv/wfi.S priv/csrpriv.S priv/irqpriv.S priv/mstatus.S \
+              priv/smode.S priv/sret.S priv/deleg.S priv/sirq.S \
+              priv/scsr.S priv/counteren.S priv/sfence.S \
               cache/tests.S cache/dcache.S cache/icache.S \
               bitx.S
 SRCS        = $(COMMON_SRC) $(SUITE_SRCS)
-INCS        = $(addprefix $(SRC_DIR)/,xlen.inc harness.inc bitx.inc cache/cache.inc)
+INCS        = $(addprefix $(SRC_DIR)/,xlen.inc harness.inc bitx.inc cache/cache.inc priv/smode.inc)
 
 OBJS64      = $(addprefix $(BUILD_DIR)/rv64/,$(SRCS:.S=.o))
 OBJS32      = $(addprefix $(BUILD_DIR)/rv32/,$(SRCS:.S=.o))

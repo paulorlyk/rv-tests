@@ -41,7 +41,12 @@ were invisible until an actual QEMU run.
   `a=false` while Zawrs is on): the run must
   reach its summary with the same totals, no `UNEXPECTED TRAP`, and
   exactly the failure counts in README "Unimplemented instructions
-  fail, they don't hang".
+  fail, they don't hang". When touching `priv/smode.inc` or the S-mode
+  files, also run each width with `-cpu rv64,zabha=true,s=false,h=false`
+  (and `rv32`): same totals, no `UNEXPECTED TRAP`, and the failure
+  counts in README "The privileged suite" (191 / 206). After a trap's
+  resume label, an S-only CSR (`medeleg`, `stvec`, `sstatus`, ...) may
+  only be touched armed (`sm_clean`, `SM_SETUP`), or that run hangs.
 - `make clean`: removes `build/`, which holds all outputs (gitignored).
 - Inside the Claude container (`claude-container.Dockerfile`), the
   toolchain is `riscv64-unknown-elf-*` (it handles both widths) and
@@ -89,7 +94,18 @@ in this file are relative to `src/`.
     (M-mode interrupts in U-mode, CLINT `msip`/`mtimecmp`; in M-mode:
     vectored `mtvec`, MSI/MTI priority),
     `priv/mstatus.S` (MPP/UXL legality, `misa.U`, trap-entry stack from
-    U). ECALL/EBREAK are RV32I proper and live in `i/system.S`,
+    U), and the S-mode files `priv/smode.S` (M/S/U switching),
+    `priv/sret.S` (SRET, TSR), `priv/deleg.S` (medeleg/mideleg),
+    `priv/sirq.S` (SSI/STI/SEI across modes, priority, vectored
+    `stvec`), `priv/scsr.S` (`sstatus`/`sie`/`sip` views, S CSRs from
+    U, M CSRs from S), `priv/counteren.S` (`mcounteren`/`scounteren`),
+    `priv/sfence.S` (SFENCE.VMA with bitx, TVM, TW in S), sharing
+    `priv/smode.inc`: its `sm_shandler` (instantiated per file by
+    `SM_HANDLER_CODE`) records a delegated trap and `ECALL`s to the
+    armed M-mode handler; `SM_RUN`/`T_SM_ILL`/`T_SM_OK` run one
+    instruction in S- or U-mode (setup goes in their `pre` argument,
+    after `TEST_BEGIN`); `sm_clean` resets S state, every S-only CSR
+    write armed. ECALL/EBREAK are RV32I proper and live in `i/system.S`,
     FENCE (with FENCE.TSO and PAUSE) in `i/fence.S`.
     `zicboz/cbozero.S` also has the `menvcfg`/`senvcfg.CBZE` U-mode
     cases.
@@ -373,10 +389,11 @@ Other notes:
   disassembly that no branch/jump offset changed.
 - Documented skips: +2 offsets from 4-byte JAL/branches (they land in
   the instruction's own upper half), `C.LUI rd=x2` (that encoding is
-  `C.ADDI16SP`), and `mepc[0]` reading as 0 after a write of 1 (the spec
-  requires it; QEMU 10.0 keeps the bit).
+  `C.ADDI16SP`), `mepc[0]` reading as 0 after a write of 1 (the spec
+  requires it; QEMU 10.0 keeps the bit), and SEI's priority over SSI/STI
+  (the spec requires it; QEMU 10.0 without Smaia takes SSI first).
 - Instructions with a single fixed encoding (C.EBREAK, ECALL, EBREAK,
-  MRET, WFI) have no variable bits, so no bitx cases: C(0,2) = 0.
+  MRET, SRET, WFI) have no variable bits, so no bitx cases: C(0,2) = 0.
 
 ## When adding or changing tests
 
@@ -450,4 +467,9 @@ Other notes:
   64-byte-aligned BASE (without it, its three vectored-interrupt checks
   FAIL; they don't hang). QEMU 10.0 checks `senvcfg.CBZE` even without
   S-mode, so `-cpu ...,s=false,h=false` fails the six U-mode
-  CBO.ZERO checks that expect it to work.
+  CBO.ZERO checks that expect it to work. The S-mode files of `priv/`
+  need S-mode (without it their checks FAIL, 185 / 200 of them), Bare
+  `satp`, M-writable `mip.STIP`/`SEIP` (Sstc's `menvcfg.STCE` = 0),
+  vectored `stvec`, a `time` CSR, the CLINT (`priv/sirq.S`,
+  `priv/sfence.S`), and `medeleg[9]` = 0 honoured (their S-mode
+  handler returns to M-mode by `ECALL`).
