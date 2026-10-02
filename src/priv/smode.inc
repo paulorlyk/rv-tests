@@ -1,7 +1,7 @@
 /* =====================================================================
  * priv/smode.inc  --  shared S-mode machinery for the privileged
  *                     suite's supervisor-mode files (smode.S, sret.S,
- *                     deleg.S, sirq.S, scsr.S, counteren.S, sfence.S),
+ *                     deleg.S, sirq.S, scsr.S, counteren.S, swfi.S),
  *                     .include'd after xlen.inc and harness.inc.
  *
  * Macros and .equ constants only, like harness.inc and bitx.inc: the

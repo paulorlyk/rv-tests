@@ -9,7 +9,7 @@ TAG="rv-tests-claude-container"
 CONTAINER_NAME="rv-tests-claude-container"
 
 if docker container inspect "$CONTAINER_NAME" &> /dev/null; then
-    docker start -ti "$CONTAINER_NAME"
+    docker start -i "$CONTAINER_NAME"
 else
   docker build \
     --progress=plain \
@@ -20,5 +20,5 @@ else
     . \
     -t "$TAG"
 
-  docker run -ti -v "$DIR:/src" --name "$CONTAINER_NAME" "$CONTAINER_NAME"
+  docker run -ti -v "$DIR:/src" --name "$CONTAINER_NAME" "$TAG"
 fi

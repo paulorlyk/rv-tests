@@ -64,7 +64,7 @@ to it.
   **`priv/csrpriv.S`**/**`priv/irqpriv.S`**/**`priv/mstatus.S`**/
   **`priv/smode.S`**/**`priv/sret.S`**/**`priv/deleg.S`**/
   **`priv/sirq.S`**/**`priv/scsr.S`**/**`priv/counteren.S`**/
-  **`priv/sfence.S`** (and `priv/smode.inc`) — the privileged suite,
+  **`priv/swfi.S`** (and `priv/smode.inc`) — the privileged suite,
   M-, S- and U-mode. See "The privileged suite" below.
 - **`cache/tests.S`** + **`cache/dcache.S`**/**`cache/icache.S`** (and
   `cache/cache.inc`) — the cache suite. See "The cache suite" below.
@@ -97,8 +97,8 @@ Current totals, all passing on both widths:
 
 | Image | Checks | Per-instruction | Bit-independence | UART output (at 115200 baud) |
 |---|---|---|---|---|
-| RV64 (`build/rv64/`) | **30050** | 4527 | 25523 | ~17 KB, ~1.5 s |
-| RV32 (`build/rv32/`) | **24020** | 3904 | 20116 | ~14 KB, ~1.2 s |
+| RV64 (`build/rv64/`) | **29981** | 4503 | 25478 | ~17 KB, ~1.5 s |
+| RV32 (`build/rv32/`) | **23951** | 3880 | 20071 | ~14 KB, ~1.2 s |
 
 (`AMOMIN`/`AMOMAX`/`AMOMINU`/`AMOMAXU` add 2348 checks on RV64, 2176 of
 them bitx, and 1168 on RV32, 1088 of them bitx. `LR`/`SC` add 927 checks
@@ -114,8 +114,8 @@ have no variable field. The M/U separation files add 589
 (`priv/mstatus.S`), none of them bitx. The S-mode files add 24
 (`priv/smode.S`), 30 (`priv/sret.S`), 47 (`priv/deleg.S`), 68
 (`priv/sirq.S`), 258 (`priv/scsr.S`), 54 on RV64 / 108 on RV32
-(`priv/counteren.S`: RV32 also has the upper-half counters) and 78
-(`priv/sfence.S`, 45 of them `SFENCE.VMA` bitx). The not-taken bitx series of the
+(`priv/counteren.S`: RV32 also has the upper-half counters) and 9
+(`priv/swfi.S`). The not-taken bitx series of the
 six branches and of `C.BEQZ`/`C.BNEZ` add 1436 on each width. The cache
 suite adds 116 on RV64 and 98 on RV32 (88 / 70 in `cache/dcache.S`, 28
 in `cache/icache.S`), none of them bitx: it tests no instruction of its
@@ -1091,8 +1091,9 @@ well.
 `MRET` and `WFI` come from the privileged architecture's machine-level
 ISA rather than from RV64I or an unprivileged extension, so they have a
 suite of their own (the base ISA's own SYSTEM instructions, `ECALL` and
-`EBREAK`, are in `i/system.S`), and so do `SRET` and `SFENCE.VMA` from
-the supervisor-level ISA. The same suite checks the separation between
+`EBREAK`, are in `i/system.S`), and so does `SRET` from the
+supervisor-level ISA. Virtual memory (`SFENCE.VMA`, `satp` translation,
+`mstatus.TVM`) is not tested for now. The same suite checks the separation between
 M-, S- and U-mode: switching between them, trap delegation, interrupt
 enables and priority across the three, and which CSRs each may touch.
 Identical on both widths apart from the CLINT access, the RV64-only
@@ -1113,12 +1114,11 @@ Identical on both widths apart from the CLINT access, the RV64-only
   U-mode, M-mode CSRs from S-mode
 - **`priv/counteren.S`**: `mcounteren`/`scounteren` gating
   `cycle`/`time`/`instret`
-- **`priv/sfence.S`**: `SFENCE.VMA`, `mstatus.TVM`, and `TW` (`WFI`) in
-  S-mode
+- **`priv/swfi.S`**: `WFI` below M-mode on a hart with S-mode
+  (`mstatus.TW`)
 
 `MRET`, `WFI` and `SRET` have a single fixed encoding, so there is
-nothing for bit independence to pair; `SFENCE.VMA` gets its 45 cases
-(`rs1` × `rs2`, see below). The other files test no new instruction
+nothing for bit independence to pair. The other files test no new instruction
 (the CSR instructions' bitx cases are in the Zicsr suite). Traps
 caused on purpose go through the armed handler (see "Traps on
 purpose"), and the U- and S-mode parts rely on the PMP entry `common.S`
@@ -1142,7 +1142,7 @@ written), `T_SM_OK` that the `ECALL` was the only trap. Every write to a
 CSR that exists only with S-mode runs armed, including the cleanup
 (`sm_clean`), so on a hart without S-mode the S-mode checks `FAIL` and
 the run completes: under QEMU with `-cpu rv64,s=false,h=false` (and
-`rv32`) the totals are unchanged and 191 / 206 checks fail (the six
+`rv32`) the totals are unchanged and 184 / 199 checks fail (the six
 U-mode `CBO.ZERO` checks of `zicboz/cbozero.S` among them, see
 "Porting").
 
@@ -1314,21 +1314,14 @@ U-mode `CBO.ZERO` checks of `zicboz/cbozero.S` among them, see
   `mcounteren` bit and reads with it; U-mode traps with only one of the
   two bits and reads with both. Where a bit is cleared every other bit
   is set, so a hart that checks the wrong bit fails.
-- **`priv/sfence.S`**: `SFENCE.VMA` doesn't trap in M-mode, nor in
-  S-mode with `TVM` = 0; with `TVM` = 1 it is illegal in S-mode, and it
-  is illegal in U-mode. With `TVM` = 1, `satp` is illegal in S-mode
-  (read, and write of 0) but not in M-mode, and other S-mode CSRs are
-  unaffected; with `TVM` = 0, S-mode writes `satp`. `WFI` in S-mode with
-  `TW` = 1 is illegal; with `TW` = 0 and a delegated SSI pending and
-  enabled in `sie` but `SIE` = 0, it completes and nothing is taken. In
-  U-mode with `TW` = 0, on a hart with S-mode, `WFI` with nothing pending
+- **`priv/swfi.S`**: `WFI` in S-mode with `TW` = 1 is illegal; with
+  `TW` = 0 and a delegated SSI pending and enabled in `sie` but `SIE` =
+  0, it completes and nothing is taken. In U-mode with `TW` = 0, on a hart with S-mode, `WFI` with nothing pending
   is illegal (like `priv/wfi.S`'s `TW` = 1 case, this pins down the
   usual, and QEMU's, reading of the spec's time limit). The `WFI` cases
   arm the machine timer `WFI_DELAY` ticks ahead, so a `WFI` that waits
   when it should trap is ended by an M-mode interrupt: a `FAIL`, not a
-  hang. The bitx cases run `SFENCE.VMA` in M-mode for every pair of
-  `rs1`/`rs2` bits (background `x0`), loaded with the sentinel, and
-  check that it doesn't trap and leaves them unchanged.
+  hang.
 
 ## The cache suite
 
@@ -1512,7 +1505,7 @@ SRCS="common.S main_tests.S \
       priv/tests.S priv/mret.S priv/wfi.S priv/csrpriv.S \
       priv/irqpriv.S priv/mstatus.S priv/smode.S priv/sret.S \
       priv/deleg.S priv/sirq.S priv/scsr.S priv/counteren.S \
-      priv/sfence.S \
+      priv/swfi.S \
       cache/tests.S cache/dcache.S cache/icache.S bitx.S"
 for f in $SRCS; do
   mkdir -p build/rv64/$(dirname $f)
@@ -1584,7 +1577,7 @@ point. To add a new suite (say, the `F` extension):
    `priv/tests.S` into `priv/mret.S`/`priv/wfi.S`/`priv/csrpriv.S`/
    `priv/irqpriv.S`/`priv/mstatus.S`/`priv/smode.S`/`priv/sret.S`/
    `priv/deleg.S`/`priv/sirq.S`/`priv/scsr.S`/`priv/counteren.S`/
-   `priv/sfence.S`, and `cache/tests.S` into
+   `priv/swfi.S`, and `cache/tests.S` into
    `cache/dcache.S`/`cache/icache.S`.
    Every extension gets its own directory, even a single-instruction one
    like Zifencei or Zicboz.
@@ -1713,13 +1706,13 @@ fields"):
    to wait but longer than the few instructions between arming the
    timer and the `WFI`. A `WFI` that never wakes hangs with its
    instruction group (`WFI:`) as the last line printed.
-   The S-mode files (`priv/smode.S` ... `priv/sfence.S`) need S-mode
+   The S-mode files (`priv/smode.S` ... `priv/swfi.S`) need S-mode
    as well, with `satp` = 0 (Bare) accepted, `medeleg` bits 2, 3 and 8
    and `mideleg`'s SSIP/STIP/SEIP writable, `mip.STIP`/`SEIP` writable
    from M-mode (true while the Sstc extension's `menvcfg.STCE` is 0,
    its reset value), vectored `stvec` at a 64-byte-aligned BASE, a
    `time` CSR that reads without trapping to M-mode, and `menvcfg`.
-   `priv/sirq.S` and `priv/sfence.S` use the same CLINT (`msip`, and the
+   `priv/sirq.S` and `priv/swfi.S` use the same CLINT (`msip`, and the
    timer as the `WFI` backstop). Their S-mode trap handler returns to
    M-mode with an `ECALL`, which must not be delegated with
    `medeleg[9]` = 0. Without S-mode their checks `FAIL` (see "The
@@ -1805,8 +1798,7 @@ Source paths elsewhere in this document are relative to `src/`.
 - `priv/scsr.S` — the `sstatus`/`sie`/`sip` views and S/M CSR
   privilege.
 - `priv/counteren.S` — `mcounteren`/`scounteren`.
-- `priv/sfence.S` — the `SFENCE.VMA` test bodies, `mstatus.TVM`, and
-  `TW` in S-mode.
+- `priv/swfi.S` — `WFI` below M-mode with S-mode (`mstatus.TW`).
 - `priv/smode.inc` — the S-mode files' shared S-mode trap handler,
   mode-entry and check macros (included, not linked).
 - `cache/tests.S` — cache suite orchestrator (defines

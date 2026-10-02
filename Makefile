@@ -77,7 +77,7 @@
 #                       tests_priv_smode/tests_priv_sret/
 #                       tests_priv_deleg/tests_priv_sirq/
 #                       tests_priv_scsr/tests_priv_counteren/
-#                       tests_priv_sfence
+#                       tests_priv_swfi
 #   priv/mret.S       - MRET
 #   priv/wfi.S        - WFI
 #   priv/csrpriv.S    - M-mode CSRs accessed from U-mode
@@ -93,7 +93,7 @@
 #   priv/scsr.S       - sstatus/sie/sip views; S-mode CSRs from U-mode,
 #                       M-mode CSRs from S-mode
 #   priv/counteren.S  - mcounteren/scounteren gating cycle/time/instret
-#   priv/sfence.S     - SFENCE.VMA, mstatus.TVM, TW (WFI) in S-mode
+#   priv/swfi.S       - WFI below M-mode with S-mode (mstatus.TW)
 #   priv/smode.inc    - the S-mode files' shared S-mode trap handler and
 #                       mode-entry macros
 #   cache/tests.S     - cache suite orchestrator; defines
@@ -167,7 +167,7 @@ SUITE_SRCS  = main_tests.S c/tests.S c/quadrant0.S c/quadrant1.S c/quadrant2.S \
               zabha/tests.S zabha/amo.S \
               priv/tests.S priv/mret.S priv/wfi.S priv/csrpriv.S priv/irqpriv.S priv/mstatus.S \
               priv/smode.S priv/sret.S priv/deleg.S priv/sirq.S \
-              priv/scsr.S priv/counteren.S priv/sfence.S \
+              priv/scsr.S priv/counteren.S priv/swfi.S \
               cache/tests.S cache/dcache.S cache/icache.S \
               bitx.S
 SRCS        = $(COMMON_SRC) $(SUITE_SRCS)

@@ -44,7 +44,7 @@ were invisible until an actual QEMU run.
   fail, they don't hang". When touching `priv/smode.inc` or the S-mode
   files, also run each width with `-cpu rv64,zabha=true,s=false,h=false`
   (and `rv32`): same totals, no `UNEXPECTED TRAP`, and the failure
-  counts in README "The privileged suite" (191 / 206). After a trap's
+  counts in README "The privileged suite" (184 / 199). After a trap's
   resume label, an S-only CSR (`medeleg`, `stvec`, `sstatus`, ...) may
   only be touched armed (`sm_clean`, `SM_SETUP`), or that run hangs.
 - `make clean`: removes `build/`, which holds all outputs (gitignored).
@@ -99,7 +99,7 @@ in this file are relative to `src/`.
     `priv/sirq.S` (SSI/STI/SEI across modes, priority, vectored
     `stvec`), `priv/scsr.S` (`sstatus`/`sie`/`sip` views, S CSRs from
     U, M CSRs from S), `priv/counteren.S` (`mcounteren`/`scounteren`),
-    `priv/sfence.S` (SFENCE.VMA with bitx, TVM, TW in S), sharing
+    `priv/swfi.S` (WFI with TW in S, WFI in U with S-mode), sharing
     `priv/smode.inc`: its `sm_shandler` (instantiated per file by
     `SM_HANDLER_CODE`) records a delegated trap and `ECALL`s to the
     armed M-mode handler; `SM_RUN`/`T_SM_ILL`/`T_SM_OK` run one
@@ -420,6 +420,8 @@ Other notes:
 ## Scope notes
 
 - RVC floating-point loads and stores are out of scope (see README).
+- Virtual memory (SFENCE.VMA, `satp` translation, `mstatus.TVM`) is
+  not tested for now.
 
 ## Porting to other hardware/simulators
 
@@ -468,8 +470,8 @@ Other notes:
   FAIL; they don't hang). QEMU 10.0 checks `senvcfg.CBZE` even without
   S-mode, so `-cpu ...,s=false,h=false` fails the six U-mode
   CBO.ZERO checks that expect it to work. The S-mode files of `priv/`
-  need S-mode (without it their checks FAIL, 185 / 200 of them), Bare
+  need S-mode (without it their checks FAIL, 178 / 193 of them), Bare
   `satp`, M-writable `mip.STIP`/`SEIP` (Sstc's `menvcfg.STCE` = 0),
   vectored `stvec`, a `time` CSR, the CLINT (`priv/sirq.S`,
-  `priv/sfence.S`), and `medeleg[9]` = 0 honoured (their S-mode
+  `priv/swfi.S`), and `medeleg[9]` = 0 honoured (their S-mode
   handler returns to M-mode by `ECALL`).

@@ -21,13 +21,13 @@
  *   priv/scsr.S     - sstatus/sie/sip views; S-mode CSRs from U-mode,
  *                     M-mode CSRs from S-mode
  *   priv/counteren.S - mcounteren/scounteren gating the counters
- *   priv/sfence.S   - SFENCE.VMA, mstatus.TVM, TW (WFI) in S-mode
+ *   priv/swfi.S     - WFI below M-mode with S-mode (mstatus.TW)
  *
  * MRET and WFI come from the privileged architecture's machine-level
  * ISA, not from RV64I/RV32I (whose own SYSTEM instructions, ECALL and
  * EBREAK, are in i/system.S) or any unprivileged extension, so they
- * get a suite of their own, as do SRET and SFENCE.VMA from the
- * supervisor-level ISA; the other files check the separation between
+ * get a suite of their own, as does SRET from the supervisor-level
+ * ISA; the other files check the separation between
  * M-, S- and U-mode. The S-mode files share priv/smode.inc (their
  * S-mode trap handler and mode-entry macros). All of them need U-mode for
  * (part of) their coverage and common.S's armed trap mode (TRAP_ARM in
@@ -63,7 +63,7 @@ run_priv_tests:
     call    tests_priv_sirq
     call    tests_priv_scsr
     call    tests_priv_counteren
-    call    tests_priv_sfence
+    call    tests_priv_swfi
 
     REG_L   ra, 0(sp)
     addi    sp, sp, 16
